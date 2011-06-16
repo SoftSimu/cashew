@@ -1,0 +1,39 @@
+<control>
+ tsimu              5000.00  ! simulate 5000 fs
+ tstep                 1.00  ! advance time in steps of 1 fs
+ writexyz   interval   5.00  ! write the geometry every 5 fs
+ verbose           200.00 3  ! verbosity switch
+! thermo     cooler   0.003  ! uncommenting this will slowly stop the movement
+</control>
+
+<particles>
+  1  MB  0.0000  0.0000  0.0000     0.0 0.0 0.0 1.0
+  2  MB  0.0000  0.0000  3.5000     0.0 0.0 1.0 0.0
+</particles>
+
+<velocities>
+  1  0.000  0.000  0.000     0.000  0.001  0.000
+  2  0.000  0.000  0.000     0.001  0.000  0.001
+</velocities>
+
+!!!!!!!!!!!!!!!!!!!!!!!
+! MB model parameters !
+!!!!!!!!!!!!!!!!!!!!!!!
+<mb-model>
+ ehb     -0.181    ! [eV] 
+ elj      0.00905  ! [eV]  
+ efi     -0.01     !  
+ rhb      2.78     ! [A]
+ sigmalj  2.58     ! [A]     
+ sigmahb  0.278    ! [A]  
+ sigmath  0.08     !    
+ expbond  0.5      !  	    
+ rbond    3.61     ! [A]      
+ dbond    0.556    ! [A]   
+ cuthb    8.0      ! [A]   
+ cutlj    9.0      ! [A]
+ cutverl  0.5      ! [A]
+ mmb      18.000   ! [g/mol]
+ imb      1.3333   ! [g/mol A^2]
+ loh      1.0
+</mb-model>

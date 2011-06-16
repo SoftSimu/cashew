@@ -1,0 +1,61 @@
+<control>
+ temperature         400.00
+ tsimu               500.00
+ tstep                 1.00
+ writexyz          startend
+ writeinp          startend
+ verbose              20.00  1
+! thermo       langevin 0.03
+ run                   test
+ rndseed               5801
+</control>
+
+!<cell>
+!7.8631 3 periodic
+!4.5397 5 periodic
+!7.4233 3 periodic
+!</cell>
+
+<particles>
+  1  MB  0.0000  0.0000  0.0000     0.0 0.0 1.0 0.0
+  2  MB  3.9315  2.2699  0.0000     0.0 0.0 1.0 0.0
+  3  MB  1.3105  2.2699  0.9267     1.0 0.0 0.0 0.0
+  4  MB  5.2420  0.0000  0.9267     1.0 0.0 0.0 0.0
+  5  MB  1.3105  2.2699  3.7067     0.0 1.0 0.0 0.0
+  6  MB  5.2420  0.0000  3.7067     0.0 1.0 0.0 0.0
+  7  MB  0.0000  0.0000  4.6333     0.0 0.0 0.0 1.0
+  8  MB  3.9315  2.2699  4.6333     0.0 0.0 0.0 1.0
+</particles>
+
+<statistics>
+writestat
+ !start 200.00
+ interval 5.00
+ time
+ temperature
+ energy
+</statistics>
+
+!!!!!!!!!!!!!!!!!!!!!!!
+! MB model parameters !
+!!!!!!!!!!!!!!!!!!!!!!!
+<mb-model>
+ ehb     -0.181    ! [eV] 
+ elj      0.00905  ! [eV]  
+ efi     -0.01     !  
+ rhb      2.78     ! [A]
+ sigmalj  2.58     ! [A]     
+ sigmahb  0.278    ! [A]  
+ sigmath  0.08     !    
+ expbond  0.5      !  	    
+ rbond    3.61     ! [A]      
+ dbond    0.556    ! [A]   
+ cuthb    8.0      ! [A]   
+ cutlj    9.0      ! [A]
+ cutverl  0.5      ! [A]
+ mmb      18.000   ! [g/mol]
+ imb      1.3333   ! [g/mol A^2]
+ loh      1.0
+</mb-model>
+
+
