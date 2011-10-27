@@ -217,7 +217,11 @@ PROGRAM cashew
      STOP
   ELSE
      CALL get_command_argument(1,system_name)
-     namelength = INDEX(system_name,' ')
+     IF(INDEX(system_name,'.mb') == 0)THEN
+         namelength = INDEX(system_name,' ')
+     ELSE
+         namelength = INDEX(system_name,'.mb')
+     END IF
   END IF  
 
 

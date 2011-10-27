@@ -1214,7 +1214,7 @@ CONTAINS
                                vect = vector(ats(ii),ats(nj),cell,pbc)
                                distance = .norm.vect
                                ! accurate cutoff
-                               this_cut = params%pot_cut(ats(ii)%type,ats(jj)%type)+&
+                               this_cut = params%pot_cut(ats(ii)%type,ats(nj)%type)+&
                                     params%cut_ver
                                IF(distance < this_cut)THEN
                                   aa_n_nbor(ii) = aa_n_nbor(ii)+1
@@ -3407,7 +3407,7 @@ CONTAINS
           CASE(3) !mb-at
              normer = cell(1)*cell(2)*cell(3)/REAL(n_mbs*n_ats,KIND=dp)/binwidth/(2.d0*pi)
           CASE(4) !any-any
-             normer = cell(1)*cell(2)*cell(3)/REAL((n_mbs+n_ats)*(n_mbs+n_ats-1),KIND=dp)/binwidth/(2.d0*pi)
+             normer = cell(1)*cell(2)*cell(3)/REAL((n_mbs+n_ats)*(n_mbs+n_ats-1),KIND=dp)/binwidth/(4.d0*pi)
           END SELECT
           DO jj = 1, rdfbins ! resord the normalized rdf
              rdf(jj,ii) = rdf(jj,ii)*normer/((REAL(jj,KIND=dp)-0.5d0)*binwidth)**2
