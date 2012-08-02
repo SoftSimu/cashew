@@ -79,18 +79,23 @@ MODULE mb_model
      INTEGER :: constrained(3), type, index
   END TYPE atom
 
+  TYPE gop
+     REAL(KIND=dp) :: pos(3), vel(3), well(3), inipos(3), mass
+     INTEGER :: constrained(3), index
+  END type gop
+
   ! interface overloading the function "vector" used for
   ! determining the vector from one particle to another
   ! (taking possible periodic boundaries into account).
   INTERFACE vector
-     MODULE PROCEDURE vector_mm, vector_ma, vector_aa
+     MODULE PROCEDURE vector_mm, vector_ma, vector_aa, vector_mg
   END INTERFACE
 
   ! interface overloading the function "displacement"
   ! used for determining the vector from the initial
   ! position of a particle to its current position.
   INTERFACE displacement
-     MODULE PROCEDURE displacement_m, displacement_a
+     MODULE PROCEDURE displacement_m, displacement_a, displacement_g
   END INTERFACE
 
 CONTAINS
@@ -229,6 +234,49 @@ CONTAINS
 !!$    END IF
 
   END FUNCTION displacement_m
+
+
+  ! Returns the displacement vector of a molecule
+  ! with respect to its initial position
+  ! *thego the molecule in question
+  ! *cell supercell dimensions
+  ! *pbc true if periodic boundaries
+  ! *vec the displacement vector from the initial to current position
+  FUNCTION displacement_g(thego,cell,pbc) &
+       RESULT(vec)
+    IMPLICIT NONE
+    TYPE(gop), INTENT(IN) :: thego
+    REAL(KIND=dp) :: vec(3)
+    REAL(KIND=dp), INTENT(IN) :: cell(3)
+    LOGICAL, INTENT(IN) :: pbc(3)
+
+    vec(1) = thego%pos(1) - thego%inipos(1)
+    vec(2) = thego%pos(2) - thego%inipos(2)
+    vec(3) = thego%pos(3) - thego%inipos(3)
+!!$    IF(pbc(1))THEN
+!!$       IF(2.d0*vec(1) > cell(1))THEN
+!!$          vec(1) = vec(1)-cell(1)
+!!$       ELSE IF(2.d0*vec(1) <= -cell(1))THEN
+!!$          vec(1) = vec(1)+cell(1)
+!!$       END IF
+!!$    END IF
+!!$    IF(pbc(2))THEN
+!!$       IF(2.d0*vec(2) > cell(2))THEN
+!!$          vec(2) = vec(2)-cell(2)
+!!$       ELSE IF(2.d0*vec(2) <= -cell(2))THEN
+!!$          vec(2) = vec(2)+cell(2)
+!!$       END IF
+!!$    END IF
+!!$    IF(pbc(3))THEN
+!!$       IF(2.d0*vec(3) > cell(3))THEN
+!!$          vec(3) = vec(3)-cell(3)
+!!$       ELSE IF(2.d0*vec(3) <= -cell(3))THEN
+!!$          vec(3) = vec(3)+cell(3)
+!!$       END IF
+!!$    END IF
+
+  END FUNCTION displacement_g
+
 
   ! Returns the displacement vector of an atom
   ! with respect to its initial position
@@ -403,6 +451,51 @@ CONTAINS
 
   END FUNCTION vector_ma
 
+
+  ! Returns the vector from a molecule to a go, taking into account
+  ! the periodic boundaries.
+  ! *mb1 (start) molecule
+  ! *go2 (end) go
+  ! *cell supercell dimensions
+  ! *pbc true if periodic boundaries
+  ! *vec vector from mb1 to at2
+  FUNCTION vector_mg(mb1,go2,cell,pbc) &
+       RESULT(vec)
+    IMPLICIT NONE
+    TYPE(mb), INTENT(IN) :: mb1
+    TYPE(gop), INTENT(IN) :: go2
+    REAL(KIND=dp) :: vec(3)
+    REAL(KIND=dp), INTENT(IN) :: cell(3)
+    LOGICAL, INTENT(IN) :: pbc(3)
+
+    vec(1) = go2%pos(1) - mb1%pos(1)
+    vec(2) = go2%pos(2) - mb1%pos(2)
+    vec(3) = go2%pos(3) - mb1%pos(3)
+    IF(pbc(1))THEN
+       IF(2.d0*vec(1) > cell(1))THEN
+          vec(1) = vec(1)-cell(1)
+       ELSE IF(2.d0*vec(1) <= -cell(1))THEN
+          vec(1) = vec(1)+cell(1)
+       END IF
+    END IF
+    IF(pbc(2))THEN
+       IF(2.d0*vec(2) > cell(2))THEN
+          vec(2) = vec(2)-cell(2)
+       ELSE IF(2.d0*vec(2) <= -cell(2))THEN
+          vec(2) = vec(2)+cell(2)
+       END IF
+    END IF
+    IF(pbc(3))THEN
+       IF(2.d0*vec(3) > cell(3))THEN
+          vec(3) = vec(3)-cell(3)
+       ELSE IF(2.d0*vec(3) <= -cell(3))THEN
+          vec(3) = vec(3)+cell(3)
+       END IF
+    END IF
+
+  END FUNCTION vector_mg
+
+
   ! Returns the vector from one atom to another, taking into account
   ! the periodic boundaries.
   ! *at1 first (start) atom
@@ -495,24 +588,30 @@ CONTAINS
   ! *ma_n_nbor MB-atom numbers of neighbors
   ! *aa_n_nbor atom-atom numbers of neighbors
   ! *params physical parameters
-  SUBROUTINE init_data_arrays(mbs,ats,cell,pbc,bonds,boxed,boxes,box_mbs,box_ats,box_mc,box_ac,&
-       mm_nbors,mm_n_nbor,ma_nbors,ma_n_nbor,aa_nbors,aa_n_nbor,params,control)
+  SUBROUTINE init_data_arrays(mbs,ats,gos,cell,pbc,bonds,boxed,boxes,&
+      box_mbs,box_ats,box_gos,box_mc,box_ac,box_gc,&
+       mm_nbors,mm_n_nbor,ma_nbors,ma_n_nbor,&
+       mg_nbors,mg_n_nbor,aa_nbors,aa_n_nbor,&
+       params,control,go)
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     TYPE(mbps), INTENT(IN) :: params
     TYPE(cps), INTENT(IN) :: control
+    TYPE(gops), INTENT(IN) :: go
     REAL(KIND=dp), POINTER :: bonds(:)
     INTEGER, POINTER :: mm_nbors(:,:), mm_n_nbor(:), &
+         mg_nbors(:,:), mg_n_nbor(:), &
          ma_nbors(:,:), ma_n_nbor(:), aa_nbors(:,:), aa_n_nbor(:), &
-         box_mbs(:,:,:,:,:), box_ats(:,:,:,:,:), &
-         box_mc(:,:,:,:), box_ac(:,:,:,:)
+         box_mbs(:,:,:,:,:), box_ats(:,:,:,:,:), box_gos(:,:,:,:,:),&
+         box_mc(:,:,:,:), box_ac(:,:,:,:), box_gc(:,:,:,:)
     INTEGER, INTENT(OUT) :: boxes(3,2)
     REAL(KIND=dp), INTENT(IN) :: cell(3)
     LOGICAL, INTENT(IN) :: pbc(3)
     LOGICAL, INTENT(OUT) :: boxed
-    INTEGER :: ii, jj, nj, n_mb, n_at, allostat, room, xb, yb, zb, ix, iy, iz, bc(3), nborsize, &
-         mm_size, ma_size, aa_size, box_size, boxsize
+    INTEGER :: ii, jj, nj, n_mb, n_at, n_go, allostat, room, xb, yb, zb, ix, iy, iz, bc(3), nborsize, &
+         mm_size, ma_size, mg_size, aa_size, box_size, boxsize
     REAL(KIND=dp) :: distance, vect(3), this_cut, xl(2), yl(2), zl(2), minrange, atomrange
     LOGICAL :: skip
 
@@ -529,6 +628,10 @@ CONTAINS
     IF(allostat /= 0) CALL abort("allocating data structures")
     ALLOCATE(ma_n_nbor(n_mb), STAT=allostat)
     IF(allostat /= 0) CALL abort("allocating data structures")
+    ALLOCATE(mg_nbors(nborsize,n_mb), STAT=allostat)
+    IF(allostat /= 0) CALL abort("allocating data structures")
+    ALLOCATE(mg_n_nbor(n_mb), STAT=allostat)
+    IF(allostat /= 0) CALL abort("allocating data structures")
     ALLOCATE(aa_nbors(nborsize,n_at), STAT=allostat)
     IF(allostat /= 0) CALL abort("allocating data structures")
     ALLOCATE(aa_n_nbor(n_at), STAT=allostat)
@@ -539,10 +642,13 @@ CONTAINS
     mm_n_nbor = 0
     ma_nbors = 0
     ma_n_nbor = 0
+    mg_nbors = 0
+    mg_n_nbor = 0
     aa_nbors = 0
     aa_n_nbor = 0
     mm_size = nborsize
     ma_size = nborsize
+    mg_size = nborsize
     aa_size = nborsize
 
     ! subcell division:
@@ -609,6 +715,37 @@ CONTAINS
                 CALL expand_boxlist(box_mbs,box_size,1)
              END IF
              box_mbs(box_mc(xb,yb,zb,2),xb,yb,zb,2) = ii
+          END DO
+       END IF
+       box_size = boxsize
+       IF(n_go > 0)THEN ! gos
+          ! the lists of gos in subcells (x,y,z)
+          ALLOCATE(box_gos(boxsize,MAXVAL(boxes(1,:)),MAXVAL(boxes(2,:)),MAXVAL(boxes(3,:)),2), STAT=allostat)
+          IF(allostat /= 0) CALL abort("allocating data structures")
+          box_gos = 0
+          ! the numbers of gos in subcells (x,y,z)
+          ALLOCATE(box_gc(MAXVAL(boxes(1,:)),MAXVAL(boxes(2,:)),MAXVAL(boxes(3,:)),2), STAT=allostat)
+          IF(allostat /= 0) CALL abort("allocating data structures")
+          box_gc = 0
+          box_size = boxsize
+          DO ii = 1, n_go ! loop over gos
+             ! find the subcell indices (xb,yb,zb) for the go
+             CALL box_coordinates(gos(ii)%pos,xl(1),yl(1),zl(1),xb,yb,zb,pbc,boxes(:,1))
+             box_gc(xb,yb,zb,1) = box_gc(xb,yb,zb,1) + 1
+             ! if the allocated space for the lists of particles is filling, expand the available space
+             IF(box_gc(xb,yb,zb,1) >= box_size-2)THEN
+                CALL expand_boxlist(box_gos,box_size,1)
+             END IF
+             box_gos(box_gc(xb,yb,zb,1),xb,yb,zb,1) = ii
+
+             ! find the subcell indices (xb,yb,zb) for the molecule
+             CALL box_coordinates(gos(ii)%pos,xl(2),yl(2),zl(2),xb,yb,zb,pbc,boxes(:,2))
+             box_gc(xb,yb,zb,2) = box_gc(xb,yb,zb,2) + 1
+             ! if the allocated space for the lists of particles is filling, expand the available space
+             IF(box_gc(xb,yb,zb,2) >= box_size-2)THEN
+                CALL expand_boxlist(box_gos,box_size,1)
+             END IF
+             box_gos(box_gc(xb,yb,zb,2),xb,yb,zb,2) = ii
           END DO
        END IF
        box_size = boxsize
@@ -690,6 +827,38 @@ CONTAINS
              END DO
           END DO
        END IF
+
+       IF(n_go > 0 .AND. n_mb > 0)THEN ! mb-go pairs
+          this_cut = params%max_mb_cut ! current cutoff (use mb cutoff)
+          DO ii = 1, n_mb
+             CALL box_coordinates(mbs(ii)%pos,xl(2),yl(2),zl(2),xb,yb,zb,pbc,boxes(:,2))
+             DO ix = -1,1 ! check only the neighboring boxes
+                DO iy = -1,1
+                   DO iz = -1,1
+                      CALL box_shift(xb,yb,zb,ix,iy,iz,boxes(:,2),pbc,bc,skip)
+                      IF(.not.skip)THEN
+                         DO jj = 1, box_gc(bc(1),bc(2),bc(3),2)
+                            
+                            nj = box_gos(jj,bc(1),bc(2),bc(3),2)
+                            vect = vector(mbs(ii),gos(nj),cell,pbc)
+                            distance = .norm.vect
+                            IF(distance < this_cut)THEN
+                               mg_n_nbor(ii) = mg_n_nbor(ii)+1
+                               IF(mg_n_nbor(ii) >= mg_size-2)THEN ! if the neighborlist is small, add more space to it
+                                  CALL expand_nborlist(mg_nbors,mg_size,1)
+                               END IF
+                               mg_nbors(mg_n_nbor(ii),ii) = nj
+                            END IF
+                            
+                         END DO
+                      END IF
+
+                   END DO
+                END DO
+             END DO
+          END DO
+       END IF
+
 
        IF(n_at > 0 .AND. n_mb > 0)THEN ! mb-atom pairs
           !this_cut = params%max_ma_cut ! current cutoff
@@ -782,6 +951,23 @@ CONTAINS
                    END IF
                    mm_nbors(mm_n_nbor(ii),ii) = jj
                    mm_nbors(mm_n_nbor(jj),jj) = ii             
+                END IF
+             END DO
+          END DO
+       END IF
+       IF(n_go > 0 .AND. n_mb > 0)THEN ! mb-go pairs
+          DO ii = 1, n_mb ! loop over mbs
+             DO jj = 1, n_go ! loop over gos
+                ! accurate cutoff
+                this_cut = params%max_mb_cut
+                vect = vector(mbs(ii),gos(jj),cell,pbc)
+                distance = .norm.vect
+                IF(distance < this_cut)THEN
+                   mg_n_nbor(ii) = mg_n_nbor(ii)+1
+                   IF(mg_n_nbor(ii) >= mg_size-2)THEN
+                      CALL expand_nborlist(mg_nbors,mg_size,1)
+                   END IF
+                   mg_nbors(mg_n_nbor(ii),ii) = jj
                 END IF
              END DO
           END DO
@@ -1922,15 +2108,16 @@ CONTAINS
   ! *random_mb logical list, true for molecules that should get a new random velocity
   ! *random_at logical list, true for atoms that should get a new random velocity
   ! *temperature the temperature for velocity generating
-  SUBROUTINE assign_random_velocities(mbs,ats,random_mb,random_at,temperature)
+  SUBROUTINE assign_random_velocities(mbs,ats,gos,random_mb,random_at,random_go,temperature)
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
-    LOGICAL, POINTER :: random_mb(:,:), random_at(:)
+    TYPE(gop), POINTER :: gos(:)
+    LOGICAL, POINTER :: random_mb(:,:), random_at(:), random_go(:)
     REAL(KIND=dp), INTENT(IN) :: temperature
     REAL(KIND=dp) :: sigma, &
          v(3), w(3), sv(3), sw(3)
-    INTEGER :: ii, n_mbs, n_ats, n_rand, n_angrand
+    INTEGER :: ii, n_mbs, n_ats, n_gos, n_rand, n_angrand
 
     sigma = sqrt(kb*temperature)
     IF(associated(mbs))THEN
@@ -1943,6 +2130,7 @@ CONTAINS
     ELSE
        n_ats = 0
     END IF
+    n_gos = gos_size(gos)
     n_rand = 0
     n_angrand = 0
     sv = 0.d0
@@ -1962,6 +2150,16 @@ CONTAINS
              sw = sw+mbs(ii)%m_inert*mbs(ii)%angvel
           END IF
 
+       END IF
+    END DO
+
+    DO ii = 1, n_gos ! loop over gos
+       IF(random_go(ii))THEN ! random velocity required
+          CALL rand_2boltzmann_vectors(v,w)
+          gos(ii)%vel = sigma/sqrt(gos(ii)%mass)*v
+
+          n_rand = n_rand+1
+          sv = sv+gos(ii)%mass*gos(ii)%vel
        END IF
     END DO
 
@@ -1991,6 +2189,11 @@ CONTAINS
        END IF
        IF(random_mb(ii,2))THEN
           mbs(ii)%angvel = mbs(ii)%angvel - sw/mbs(ii)%m_inert
+       END IF
+    END DO
+    DO ii = 1, n_gos
+       IF(random_go(ii))THEN
+          gos(ii)%vel = gos(ii)%vel - sv/gos(ii)%mass
        END IF
     END DO
     DO ii = 1, n_ats
@@ -3170,6 +3373,27 @@ CONTAINS
 
     RETURN
   END FUNCTION ats_size
+
+
+  ! a more secure way to get the size of the pointer array for gos
+  ! *thesize the size of the array
+  ! *gos the pointer list of gos
+  FUNCTION gos_size(gos) &
+       RESULT(thesize)
+    IMPLICIT NONE
+    TYPE(gop), POINTER :: gos(:)
+    INTEGER :: thesize
+
+    IF(associated(gos))THEN
+       thesize = SIZE(gos)
+    ELSE
+       thesize = 0
+    END IF
+
+    RETURN
+  END FUNCTION gos_size
+
+
 
   ! Calculates the rate of proximity [0,1] for two molecules.
   ! That is, this is the bond number function f(r) for

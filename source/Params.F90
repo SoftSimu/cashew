@@ -302,4 +302,13 @@ MODULE parameters
      LOGICAL :: scalable(3), adf_angle
   END TYPE cps
 
+  ! Storage for go-protein parameters
+  TYPE gops
+      INTEGER :: length
+      INTEGER, POINTER :: indices(:), array_position(:)
+      REAL(KIND=dp), POINTER :: r_chain(:), theta_chain(:), &
+          phi_chain(:), r_native(:,:), epsilon_water(:), mass_chain(:)
+      REAL(KIND=dp) :: r_rep, sigma, epsilon, kr, ktheta, kphi1, kphi2
+  END TYPE
+
 END MODULE parameters

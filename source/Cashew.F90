@@ -138,7 +138,8 @@ PROGRAM cashew
   INTEGER :: boundary_type(3)  
   TYPE(mb), POINTER :: molecules(:), mb_dummy(:)
   TYPE(atom), POINTER :: atoms(:), at_dummy(:)
-  INTEGER :: N_mols, N_ats, N_elements, N_freedom
+  TYPE(gop), POINTER :: gos(:), go_dummy(:)
+  INTEGER :: N_mols, N_ats, N_gos, N_elements, N_freedom
   LOGICAL :: is_constrained
   INTEGER, POINTER :: n_types(:)
 
@@ -147,11 +148,13 @@ PROGRAM cashew
   INTEGER, POINTER :: & ! neighbor lists
        mbmb_neighbors(:,:), mbmb_n_nbors(:), &
        mbat_neighbors(:,:), mbat_n_nbors(:), &
+       mbgo_neighbors(:,:), mbgo_n_nbors(:), &
        atat_neighbors(:,:), atat_n_nbors(:)
   !LOGICAL, POINTER :: pair_done(:,:), atom_pair_done(:,:) ! to prevent double counting (obsolete)
   REAL(KIND=dp) :: e_pot,e_lenjon,e_bonds, e_mbat, e_atat, e_constr, e_kin, &
        e_lin, e_rot, last_e ! energy components
   REAL(KIND=dp), POINTER :: mb_forces(:,:), mb_torques(:,:), atom_forces(:,:), & ! forces
+       go_forces(:,:), old_go_forces(:,:), go_conj_forces(:,:), &
        old_mb_forces(:,:), old_mb_torques(:,:), old_atom_forces(:,:), & ! conjugate gradients
        mb_conj_forces(:,:), mb_conj_torques(:,:), atom_conj_forces(:,:), &
        n_bond(:) ! bond count
@@ -159,6 +162,7 @@ PROGRAM cashew
   ! special types storing input parameters (defined in parameters module)
   TYPE(mbps) :: physical_params
   TYPE(cps) :: control_params
+  TYPE(gops) :: go_params
 
   ! virtual time, particle movement monitor
   REAL(KIND=dp) :: simulation_time, speaktimer, xyztimer, bondtimer, inptimer, rdftimer, offset, &
@@ -182,7 +186,8 @@ PROGRAM cashew
 
   ! box decomposition
   INTEGER :: boxes(3,2)
-  INTEGER, POINTER :: box_mbs(:,:,:,:,:), box_ats(:,:,:,:,:), box_mb_count(:,:,:,:), box_at_count(:,:,:,:)
+  INTEGER, POINTER :: box_mbs(:,:,:,:,:), box_ats(:,:,:,:,:), box_gos(:,:,:,:,:), &
+       box_mb_count(:,:,:,:), box_at_count(:,:,:,:), box_go_count(:,:,:,:)
   LOGICAL :: boxed
   
   ! general
@@ -248,10 +253,10 @@ PROGRAM cashew
   ! so it's best to not write out yet...
   ! WRITE(*,*) "Reading input file "//system_name(1:namelength-1)//"."//MB_IN
   CALL parse_input(system_name(1:namelength-1)//"."//MB_IN,&
-       control_params,physical_params,&
+       control_params,physical_params,go_params,&
        supercell,periodic_boundary,boundary_type,boundary_value,&
-       molecules,atoms,&
-       n_mols,n_ats,n_elements,n_freedom,n_types,is_constrained)
+       molecules,atoms,gos,&
+       n_mols,n_ats,n_gos,n_elements,n_freedom,n_types,is_constrained)
   ! Notify of read input
   IF(control_params%verbose > 0.d0 .AND. cpu_id == master_cpu)THEN
      WRITE(*,*) "Read the input file "//system_name(1:namelength-1)//"."//MB_IN
@@ -262,11 +267,15 @@ PROGRAM cashew
   ! Initialize data arrays
   IF(control_params%verbose > 0.d0 .AND. cpu_id == master_cpu) &
        WRITE(*,*) "Initializing data structures"  
-  CALL init_data_arrays(molecules,atoms,supercell,periodic_boundary,&
-       mb_bonds,boxed,boxes,box_mbs,box_ats,box_mb_count,box_at_count,&
+  CALL init_data_arrays(molecules,atoms,gos,supercell,periodic_boundary,&
+       mb_bonds,boxed,boxes,&
+       box_mbs,box_ats,box_gos,&
+       box_mb_count,box_at_count,box_go_count,&
        mbmb_neighbors,mbmb_n_nbors,&
-       mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
-       physical_params,control_params)  
+       mbat_neighbors,mbat_n_nbors,&
+       mbgo_neighbors,mbgo_n_nbors,&
+       atat_neighbors,atat_n_nbors,&
+       physical_params,control_params,go_params)  
 
   ! Allocate force and torque arrays
   ALLOCATE(mb_forces(3,n_mols), STAT = allostat)
@@ -275,6 +284,50 @@ PROGRAM cashew
   IF(allostat /= 0) CALL abort("allocating torque array")
   ALLOCATE(atom_forces(3,n_ats), STAT = allostat)
   IF(allostat /= 0) CALL abort("allocating force array")
+  ALLOCATE(go_forces(3,n_gos), STAT = allostat)
+  IF(allostat /= 0) CALL abort("allocating force array")
+
+
+
+  write(*,*) "did we read the go particles correctly?"
+  write(*,*) "go params"
+  write(*,*) "  length:   ", go_params%length
+  write(*,*) "  indices:  ", go_params%indices
+  write(*,*) "  array:    ", go_params%array_position
+  write(*,*) "  rs:       ", go_params%r_chain
+  write(*,*) "  thetas:   ", go_params%theta_chain
+  write(*,*) "  phis:     ", go_params%phi_chain
+  write(*,*) "  mb eps:   ", go_params%epsilon_water
+  write(*,*) "  r rep:    ", go_params%r_rep
+  write(*,*) "  sigma:    ", go_params%sigma
+  write(*,*) "  eps:      ", go_params%epsilon
+  write(*,*) "  k r:      ", go_params%kr
+  write(*,*) "  k theta:  ", go_params%ktheta
+  write(*,*) "  k phi 1:  ", go_params%kphi1
+  write(*,*) "  k phi 2:  ", go_params%kphi2
+  do i = 1, n_gos
+     do j = 1, n_gos
+        if(go_params%r_native(i,j) > 0.d0)then
+           write(*,*) "  r native: ", i,j,go_params%r_native(i,j)
+        end if
+     end do
+  end do
+
+  do i = 1, n_gos
+     write(*,*) "go particle ", i
+     write(*,*) "  index: ", gos(i)%index
+     write(*,*) "  pos:   ", gos(i)%pos
+     write(*,*) "  vel:   ", gos(i)%vel
+     write(*,*) "  mass:  ", gos(i)%mass
+     write(*,*) "  inipos:", gos(i)%inipos
+     write(*,*) "  well:  ", gos(i)%well
+     write(*,*) "  constr:", gos(i)%constrained
+  end do
+
+
+
+
+
 
   ! if bond monitoring is requested, allocate arrays for that
   IF(control_params%bond_writer /= noxyz_index)THEN

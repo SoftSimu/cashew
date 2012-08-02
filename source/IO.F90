@@ -48,11 +48,13 @@ MODULE file_handler
   CHARACTER(LEN=labelw), PARAMETER :: &
        mbname = "mb", &
        armname = "hb", &
-       grouptag = "to"
+       grouptag = "to", &
+       goname = "go"
        
   CHARACTER(LEN=2), PARAMETER :: &
        lenjon_pot = "lj", &
-       cgtag = "cg"
+       cgtag = "cg", &
+       krtag = "kr"
 
   CHARACTER(LEN=3), PARAMETER :: &
        E_LJtag = "elj", &
@@ -70,7 +72,8 @@ MODULE file_handler
        postag = "pos", &
        veltag = "vel", &
        runtag = "run", &
-       xyzread = "xyz"
+       xyzread = "xyz", &
+       sigma_mbtag = "smb"
 
   CHARACTER(LEN=4), PARAMETER :: &
 !       Temptag = "temp", & ! changed to "temperature"
@@ -87,7 +90,12 @@ MODULE file_handler
        armstag = "arms", &
        truetag = "true", &
        hard_pot = "hard", &
-       fene_pot = "fene"
+       fene_pot = "fene", &
+       r_repulsivetag = "rrep", &
+       eps_nativetag = "enat", &
+       eps_mbtag = "embs", &
+       r_nativetag = "rnat"
+       
 
   CHARACTER(LEN=5), PARAMETER :: &
        R_btag = "rbond", &
@@ -106,7 +114,10 @@ MODULE file_handler
        yaxistag = "yaxis", &
        zaxistag = "zaxis", &
        angletag = "angle", &
-       shell_pot = "shell"
+       shell_pot = "shell", &
+       chaintag = "chain", &
+       k_phi1tag = "kphi1", &
+       k_phi2tag = "kphi2" 
 
   CHARACTER(LEN=6), PARAMETER :: &
        frozentag = "frozen", &
@@ -120,7 +131,9 @@ MODULE file_handler
        mbatomtag = "mbatom", &
        volumetag = "volume", &
        torquetag = "torque", &
-       followtag = "follow"
+       followtag = "follow", &
+       k_thetatag = "ktheta", &
+       masstag   = "masses"
 
   CHARACTER(LEN=7), PARAMETER :: &
        Sigma_LJtag = "sigmalj", &
@@ -137,7 +150,10 @@ MODULE file_handler
        cgstepstag = "cgsteps", &
        reducedtag = "reduced", &
        noangletag = "noangle", &
-       hardrep_pot = "hardrep"
+       hardrep_pot = "hardrep", &
+       lengthstag = "lengths", &
+       bondanglestag = "bangles", &
+       torsionanglestag = "tangles"
 
   CHARACTER(LEN=8), PARAMETER :: &
        periodictag = "periodic", &
@@ -179,7 +195,8 @@ MODULE file_handler
   CHARACTER(LEN=7),  PARAMETER :: main_block   = "control"
   CHARACTER(LEN=8),  PARAMETER :: mb_block     = "mb-model"
   CHARACTER(LEN=10), PARAMETER :: stat_block   = "statistics"
-  INTEGER, PARAMETER :: total_blocks = 9
+  CHARACTER(LEN=2),  PARAMETER :: go_block     = "go"
+  INTEGER, PARAMETER :: total_blocks = 10
   
   ! a weird real used for denoting missing input parameters
   REAL(KIND=dp), PARAMETER :: missing_r = -93678.39285d0
@@ -210,18 +227,20 @@ CONTAINS
   ! *n_freedom number of degrees of freedom
   ! *found_types the number of atoms of each type
   ! *is_constr true if there are constraints in place
-  SUBROUTINE parse_input(filename,control,params,cell,pbc,btype,bval,&
-       mbs,ats,n_mbs,n_ats,n_elems,n_freedom,found_types,is_constr)
+  SUBROUTINE parse_input(filename,control,params,go,cell,pbc,btype,bval,&
+       mbs,ats,gos,n_mbs,n_ats,n_gos,n_elems,n_freedom,found_types,is_constr)
     IMPLICIT NONE
     CHARACTER(LEN=*), INTENT(IN) :: filename
     TYPE(cps), INTENT(OUT) :: control
     TYPE(mbps), INTENT(OUT) :: params
+    TYPE(gops), INTENT(OUT) :: go
     REAL(KIND=dp), INTENT(OUT) :: cell(3), bval(3)
     LOGICAL, INTENT(OUT) :: pbc(3), is_constr
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     INTEGER :: ii, jj, n_lines
-    INTEGER, INTENT(OUT) :: n_elems, n_mbs, n_ats, n_freedom, btype(3)
+    INTEGER, INTENT(OUT) :: n_elems, n_mbs, n_ats, n_gos, n_freedom, btype(3)
     CHARACTER, POINTER :: data(:,:)
     CHARACTER(LEN=100), POINTER :: tokens(:)
     INTEGER, POINTER :: lwidths(:), twidths(:), found_types(:)
@@ -230,7 +249,7 @@ CONTAINS
     CHARACTER(LEN=labelw) :: label1, label2
     INTEGER :: blocklines(total_blocks,2), blnr, blockopen
     INTEGER :: multi(3)
-    LOGICAL, POINTER :: random_mb_vel(:,:), random_at_vel(:)
+    LOGICAL, POINTER :: random_mb_vel(:,:), random_at_vel(:), random_go_vel(:)
     REAL(KIND=dp) :: adfmax
 
     ! read the entire input file as a character array
@@ -273,6 +292,17 @@ CONTAINS
              blocklines(2,2) = ii
              IF(blockopen /= 2) CALL abort("found "//readtag(1:twidths(1))//" while in "//openname)
              blockopen = 0
+
+          CASE ("<"//go_block//">") ! start go
+             blocklines(10,1) = ii
+             IF(blockopen /= 0) CALL abort("found "//readtag(1:twidths(1))//" while in "//openname)
+             blockopen = 10
+             openname = "<"//go_block//">"
+          CASE ("</"//go_block//">") ! end go
+             blocklines(10,2) = ii
+             IF(blockopen /= 10) CALL abort("found "//readtag(1:twidths(1))//" while in "//openname)
+             blockopen = 0
+
           CASE ("<"//cell_block//">") ! start cell
              blocklines(3,1) = ii
              IF(blockopen /= 0) CALL abort("found "//readtag(1:twidths(1))//" while in "//openname)
@@ -382,6 +412,22 @@ CONTAINS
        CALL abort("The block <"//mb_block//"> is missing")
     END IF
 
+
+    ! go-model
+    blnr = 10
+    IF(blocklines(blnr,1) /= 0)THEN
+       IF(blocklines(blnr,2) > blocklines(blnr,1)+1)THEN          
+          CALL parse_go(data(:,blocklines(blnr,1)+1:blocklines(blnr,2)-1),&
+               lwidths(blocklines(blnr,1)+1:blocklines(blnr,2)-1),&
+               go)
+       ELSE IF(blocklines(blnr,2) == blocklines(blnr,1)+1)THEN
+          CALL abort("The block <"//go_block//"> is empty")
+       ELSE         
+          CALL abort("The block <"//go_block//"> is unclosed")
+       END IF
+    END IF
+
+
     ! cell
     blnr = 3
     IF(blocklines(blnr,1) /= 0)THEN
@@ -452,7 +498,7 @@ CONTAINS
        IF(blocklines(blnr,2) > blocklines(blnr,1)+1)THEN          
           CALL parse_particles(data(:,blocklines(blnr,1)+1:blocklines(blnr,2)-1),&
                lwidths(blocklines(blnr,1)+1:blocklines(blnr,2)-1),&
-               n_elems,mbs,ats,params,found_types)
+               n_elems,mbs,ats,gos,params,go,found_types)
        ELSE IF(blocklines(blnr,2) == blocklines(blnr,1)+1)THEN
           CALL abort("The block <"//pos_block//"> is empty")
        ELSE         
@@ -464,6 +510,7 @@ CONTAINS
 
     n_mbs = mbs_size(mbs)
     n_ats = ats_size(ats)
+    n_gos = gos_size(gos)
 
     ! check for periodicity
     DO ii = 1, n_mbs ! loop over mbs
@@ -475,6 +522,16 @@ CONTAINS
        END DO
        ! record the initial position
        mbs(ii)%inipos = mbs(ii)%pos
+    END DO
+    DO ii = 1, n_gos ! loop over gos
+       DO jj = 1, 3 ! loop over x, y, z
+          IF(pbc(jj))THEN 
+             ! move the particle by multiples of the cell size to bring it inside the cell, if it is not
+             CALL move_in_cell(gos(ii)%pos(jj),cell(jj))
+          END IF
+       END DO
+       ! record the initial position
+       gos(ii)%inipos = gos(ii)%pos
     END DO
     DO ii = 1, n_ats ! loop over atoms
        DO jj = 1, 3 ! loop over x, y, z
@@ -493,14 +550,16 @@ CONTAINS
        IF(blocklines(blnr,2) > blocklines(blnr,1)+1)THEN          
           CALL parse_velocities(data(:,blocklines(blnr,1)+1:blocklines(blnr,2)-1),&
                lwidths(blocklines(blnr,1)+1:blocklines(blnr,2)-1),&
-               mbs,ats,random_mb_vel,random_at_vel)
+               mbs,ats,gos,random_mb_vel,random_at_vel,random_go_vel)
        ELSE IF(blocklines(blnr,2) == blocklines(blnr,1)+1)THEN
           IF(CPU_ID == MASTER_CPU) WRITE(*,*) "The block <"//vel_block//"> is empty"
           ! random velocities everywhere
           ALLOCATE(random_mb_vel(SIZE(mbs(:)),2))
           ALLOCATE(random_at_vel(SIZE(ats(:))))
+          ALLOCATE(random_go_vel(SIZE(ats(:))))
           random_mb_vel = .true.
           random_at_vel = .true.
+          random_go_vel = .true.
        ELSE         
           CALL abort("The block <"//pos_block//"> is unclosed")
        END IF
@@ -508,8 +567,10 @@ CONTAINS
        ! random velocities everywhere
        ALLOCATE(random_mb_vel(SIZE(mbs(:)),2))
        ALLOCATE(random_at_vel(SIZE(ats(:))))
+       ALLOCATE(random_go_vel(SIZE(ats(:))))
        random_mb_vel = .true.
        random_at_vel = .true.
+       random_go_vel = .true.
     END IF
 
     ! constraints
@@ -519,7 +580,7 @@ CONTAINS
        IF(blocklines(blnr,2) > blocklines(blnr,1)+1)THEN          
           CALL parse_constraints(data(:,blocklines(blnr,1)+1:blocklines(blnr,2)-1),&
                lwidths(blocklines(blnr,1)+1:blocklines(blnr,2)-1),&
-               mbs,ats)
+               mbs,ats,gos)
           is_constr = .true.
        ELSE IF(blocklines(blnr,2) == blocklines(blnr,1)+1)THEN
           ! empty constraints block
@@ -527,6 +588,10 @@ CONTAINS
           DO ii = 1, n_mbs
              mbs(ii)%constrained = no_constr_index
              mbs(ii)%well = 0.d0
+          END DO
+          DO ii = 1, n_gos
+             gos(ii)%constrained = no_constr_index
+             gos(ii)%well = 0.d0
           END DO
           DO ii = 1, n_ats
              ats(ii)%constrained = no_constr_index
@@ -540,6 +605,10 @@ CONTAINS
        DO ii = 1, n_mbs
           mbs(ii)%constrained = no_constr_index
           mbs(ii)%well = 0.d0
+       END DO
+       DO ii = 1, n_gos
+          gos(ii)%constrained = no_constr_index
+          gos(ii)%well = 0.d0
        END DO
        DO ii = 1, n_ats
           ats(ii)%constrained = no_constr_index
@@ -557,6 +626,17 @@ CONTAINS
              mbs(ii)%vel(jj) = 0.d0 
              mbs(ii)%angvel(jj) = 0.d0
              !random_mb_vel(ii,:) = .false. ! no random velocity or angular velocity
+          END IF
+       END DO
+    END DO
+    DO ii = 1, n_gos ! loop over gos
+       DO jj = 1, 3 ! loop over x, y, z
+          IF(gos(ii)%constrained(jj) == frozen_pos_index)THEN ! frozen position
+             gos(ii)%vel(jj) = 0.d0
+             !random_at_vel(ii) = .false.
+          ELSE IF(gos(ii)%constrained(jj) == all_frozen_index)THEN ! all frozen
+             gos(ii)%vel(jj) = 0.d0 
+             !random_at_vel(ii) = .false.
           END IF
        END DO
     END DO
@@ -628,7 +708,7 @@ CONTAINS
        IF(blocklines(blnr,2) > blocklines(blnr,1)+1)THEN          
           CALL parse_statistics(data(:,blocklines(blnr,1)+1:blocklines(blnr,2)-1),&
                lwidths(blocklines(blnr,1)+1:blocklines(blnr,2)-1),&
-               control,mbs,ats)
+               control,mbs,ats,gos)
        ELSE IF(blocklines(blnr,2) == blocklines(blnr,1)+1)THEN
           IF(CPU_ID == MASTER_CPU) WRITE(*,*) "The block <"//stat_block//"> is empty"
           ! no stats
@@ -667,9 +747,15 @@ CONTAINS
     ! if there are unused elements, remove them from lists
     CALL drop_unused(n_elems,found_types,params)
 
+    ! cell multiplication does not work with the go protein since only one protein is allowed in the current model
+    IF(maxval(multi) > 1 .and. n_gos > 0)THEN
+       CALL abort("Cell expanding is not allowed with go-particles since the model currently allows only one protein.")
+    END if
     ! multiply cell if requested
     ! this will expand the cell vectors and copy the particles in the cell
-    CALL copy_cell(mbs,ats,cell,multi,random_mb_vel,random_at_vel,n_mbs,n_ats,found_types)
+    IF(n_gos == 0)THEN
+       CALL copy_cell(mbs,ats,gos,cell,multi,random_mb_vel,random_at_vel,random_go_vel,n_mbs,n_ats,n_gos,found_types)
+    END IF
 
     ! get the maximum interaction ranges
     params%max_mb_cut = MAX(params%cut_hb,params%cut_lj)+params%cut_ver
@@ -787,7 +873,7 @@ CONTAINS
     END IF
 
     ! assign random velocities
-    CALL assign_random_velocities(mbs,ats,random_mb_vel,random_at_vel,control%ini_temp)
+    CALL assign_random_velocities(mbs,ats,gos,random_mb_vel,random_at_vel,random_go_vel,control%ini_temp)
 
     ! Check for velocities of constrained particles
     DO ii = 1, n_mbs ! loop over mbs
@@ -799,6 +885,17 @@ CONTAINS
              mbs(ii)%vel(jj) = 0.d0 
              mbs(ii)%angvel(jj) = 0.d0
              !random_mb_vel(ii,:) = .false. ! no random velocity or angular velocity
+          END IF
+       END DO
+    END DO
+    DO ii = 1, n_gos ! loop over gos
+       DO jj = 1, 3 ! loop over x, y, z
+          IF(gos(ii)%constrained(jj) == frozen_pos_index)THEN ! frozen position
+             gos(ii)%vel(jj) = 0.d0
+             !random_at_vel(ii) = .false.
+          ELSE IF(gos(ii)%constrained(jj) == all_frozen_index)THEN ! all frozen
+             gos(ii)%vel(jj) = 0.d0 
+             !random_at_vel(ii) = .false.
           END IF
        END DO
     END DO
@@ -828,6 +925,16 @@ CONTAINS
              END SELECT
           END DO
        END DO
+       DO ii = 1, n_gos ! loop over atoms
+          DO jj = 1, 3 ! loop over x, y, z
+             SELECT CASE(gos(ii)%constrained(jj))
+             CASE(all_frozen_index) ! no freedom
+             CASE(frozen_pos_index)
+             CASE DEFAULT
+                n_freedom = n_freedom+1
+             END SELECT
+          END DO
+       END DO
        DO ii = 1, n_ats ! loop over atoms
           DO jj = 1, 3 ! loop over x, y, z
              SELECT CASE(ats(ii)%constrained(jj))
@@ -839,7 +946,7 @@ CONTAINS
           END DO
        END DO
     ELSE ! if no constraints are present, the mbs have 6 and atoms 3 degrees of freedom
-       n_freedom = 6*n_mbs + 3*n_ats
+       n_freedom = 6*n_mbs + 3*n_ats + 3*n_gos
     END IF
     
     IF(associated(tokens))THEN
@@ -874,27 +981,31 @@ CONTAINS
   ! *n_mbs number of molecules
   ! *n_ats number of atoms
   ! *found_types numbers of atoms of each type
-  SUBROUTINE copy_cell(mbs,ats,cell,multi,gen_mb_vel,gen_at_vel,n_mbs,n_ats,found_types)
+  SUBROUTINE copy_cell(mbs,ats,gos,cell,multi,gen_mb_vel,gen_at_vel,gen_go_vel,n_mbs,n_ats,n_gos,found_types)
     IMPLICIT NONE
     REAL(KIND=dp), INTENT(INOUT) :: cell(3)
     TYPE(mb), POINTER :: mbs(:)
     TYPE(mb), ALLOCATABLE :: temp_mbs(:)
     TYPE(atom), POINTER :: ats(:)
     TYPE(atom), ALLOCATABLE :: temp_ats(:)
+    TYPE(gop), POINTER :: gos(:)
+    TYPE(gop), ALLOCATABLE :: temp_gos(:)
     INTEGER, INTENT(IN) :: multi(3)
-    INTEGER, INTENT(INOUT) :: n_mbs, n_ats
+    INTEGER, INTENT(INOUT) :: n_mbs, n_ats, n_gos
     INTEGER, POINTER :: found_types(:)
     INTEGER :: ii, ix, iy, iz, plier, ind
-    LOGICAL, POINTER :: gen_mb_vel(:,:), gen_at_vel(:)
-    LOGICAL, ALLOCATABLE :: temp_gen_mb(:,:), temp_gen_at(:)
+    LOGICAL, POINTER :: gen_mb_vel(:,:), gen_at_vel(:), gen_go_vel(:)
+    LOGICAL, ALLOCATABLE :: temp_gen_mb(:,:), temp_gen_at(:), temp_gen_go(:)
 
     ! volume multiplyer
     plier = multi(1)*multi(2)*multi(3)
 
     ALLOCATE(temp_mbs(n_mbs*plier))
     ALLOCATE(temp_ats(n_ats*plier))
+    ALLOCATE(temp_gos(n_gos*plier))
     ALLOCATE(temp_gen_mb(n_mbs*plier,2))
     ALLOCATE(temp_gen_at(n_ats*plier))
+    ALLOCATE(temp_gen_go(n_gos*plier))
     
     IF(n_ats > 0)THEN
        DO ii = 1, SIZE(found_types(:))
@@ -937,6 +1048,19 @@ CONTAINS
                 temp_gen_at(ind) = gen_at_vel(ii)
                 temp_ats(ind)%index = ind + n_mbs*plier ! index is the atomic index plus the index of the last mb
              END DO
+             DO ii = 1, n_gos ! loop over gos
+                ind = ii + ( iz-1 + (iy-1)*multi(3) + (ix-1)*multi(3)*multi(2) )*n_gos ! index (in gos list)
+                temp_gos(ind)%pos(1) = gos(ii)%pos(1) + (ix-1)*cell(1)
+                temp_gos(ind)%pos(2) = gos(ii)%pos(2) + (iy-1)*cell(2)
+                temp_gos(ind)%pos(3) = gos(ii)%pos(3) + (iz-1)*cell(3)
+                temp_gos(ind)%vel = gos(ii)%vel
+                temp_gos(ind)%well = gos(ii)%well
+                temp_gos(ind)%constrained = gos(ii)%constrained
+                temp_gos(ind)%inipos = temp_gos(ind)%pos
+                temp_gos(ind)%mass = gos(ii)%mass
+                temp_gen_go(ind) = gen_go_vel(ii)
+                temp_gos(ind)%index = ind + (n_ats+n_mbs)*plier
+             END DO
           END DO
        END DO
     END DO
@@ -950,6 +1074,10 @@ CONTAINS
        DEALLOCATE(ats)
     END IF
     NULLIFY(ats)
+    IF(associated(gos))THEN
+       DEALLOCATE(gos)
+    END IF
+    NULLIFY(gos)
     IF(associated(gen_mb_vel))THEN
        DEALLOCATE(gen_mb_vel)
     END IF
@@ -958,20 +1086,30 @@ CONTAINS
        DEALLOCATE(gen_at_vel)
     END IF
     NULLIFY(gen_at_vel)
+    IF(associated(gen_go_vel))THEN
+       DEALLOCATE(gen_go_vel)
+    END IF
+    NULLIFY(gen_go_vel)
     ALLOCATE(mbs(n_mbs*plier))
     ALLOCATE(ats(n_ats*plier))
+    ALLOCATE(gos(n_gos*plier))
     ALLOCATE(gen_mb_vel(n_mbs*plier,2))
     ALLOCATE(gen_at_vel(n_ats*plier))
+    ALLOCATE(gen_go_vel(n_gos*plier))
 
     mbs = temp_mbs
     ats = temp_ats
+    gos = temp_gos
     gen_mb_vel = temp_gen_mb
     gen_at_vel = temp_gen_at
+    gen_go_vel = temp_gen_go
 
     DEALLOCATE(temp_mbs)
     DEALLOCATE(temp_ats)
+    DEALLOCATE(temp_gos)
     DEALLOCATE(temp_gen_mb)
     DEALLOCATE(temp_gen_at)
+    DEALLOCATE(temp_gen_go)
     
     ! expand the cell
     DO ii = 1,3
@@ -983,6 +1121,7 @@ CONTAINS
     ! expand the counters for numbers of particles
     n_mbs = n_mbs*plier
     n_ats = n_ats*plier
+    n_gos = n_gos*plier
 
     RETURN
   END SUBROUTINE copy_cell
@@ -1439,6 +1578,347 @@ CONTAINS
     RETURN
   END SUBROUTINE parse_mb
 
+
+
+  ! parses information in the "go" block
+  ! *data the contents of the block as a 2D character array
+  ! *lwidths widths of the rows in "data"
+  ! *control control parameters
+  ! *params physical parameters
+  SUBROUTINE parse_go(data,lwidths,go)
+    IMPLICIT NONE
+    CHARACTER, INTENT(IN) :: data(:,:)
+    TYPE(gops), INTENT(INOUT) :: go
+    CHARACTER(LEN=100), POINTER :: tokens(:)
+    INTEGER, INTENT(IN) :: lwidths(:)
+    INTEGER, POINTER :: twidths(:)
+    INTEGER :: ii, jj, iostat, n_lines, n_tokens, t_ind, t_ind2, index1, index2, max_index
+    CHARACTER(LEN=100) :: readtag
+
+    n_lines = SIZE(data(1,:))
+    go%length = 0
+    max_index = 0
+
+    ! Find the length of the protein
+    DO ii = 1, n_lines ! loop over the lines of data
+       IF(go%length < 1)THEN
+          CALL tokenize(data(1:lwidths(ii),ii)," ",tokens,twidths)
+          n_tokens = SIZE(tokens(:))
+          
+          t_ind = 1
+          readtag = tokens(t_ind)
+          t_ind2 = 2
+          
+          IF(n_tokens > 1)THEN
+             IF( readtag(1:twidths(t_ind)) == chaintag )THEN
+                go%length = n_tokens-1
+             END IF
+          END IF
+       END IF
+    END DO
+    IF(go%length < 4)THEN
+       CALL abort_value(chaintag, go_block)
+    END IF
+
+    ! Set all params to default
+    ALLOCATE(go%indices(go%length))
+    ALLOCATE(go%mass_chain(go%length))
+    ALLOCATE(go%r_chain(go%length-1))
+    ALLOCATE(go%theta_chain(go%length-2))
+    ALLOCATE(go%phi_chain(go%length-3))
+    ALLOCATE(go%r_native(go%length,go%length))
+    ALLOCATE(go%epsilon_water(go%length))
+    go%indices = -1
+    go%r_chain = missing_r
+    go%mass_chain = missing_r
+    go%theta_chain = missing_r
+    go%phi_chain = missing_r
+    go%r_native = missing_r
+    go%epsilon_water = missing_r
+    go%r_rep = missing_r
+    go%sigma = missing_r
+    go%epsilon = missing_r
+    go%kr = missing_r
+    go%ktheta = missing_r
+    go%kphi1 = missing_r
+    go%kphi2 = missing_r
+
+    ! read the chain
+    DO ii = 1, n_lines ! loop over the lines of data
+       CALL tokenize(data(1:lwidths(ii),ii)," ",tokens,twidths)
+       n_tokens = SIZE(tokens(:))
+
+       t_ind = 1
+       readtag = tokens(t_ind)
+       t_ind2 = 2
+
+       IF(n_tokens > 1)THEN
+          
+          ! compare the tags to known keywords
+          SELECT CASE(readtag(1:twidths(t_ind)))
+             
+          CASE(chaintag) ! chain indices
+             IF(n_tokens-1 /= go%length)THEN
+                CALL abort_value(chaintag, go_block)
+             END IF
+             READ(tokens(t_ind2:n_tokens),*,IOSTAT=iostat) go%indices
+             max_index = MAXVAL(go%indices)
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+
+          END SELECT
+       END IF
+    END DO
+
+    ! check for duplicate indices
+    DO ii = 1, go%length
+       DO jj = 1, go%length
+          IF(ii /= jj)THEN
+             
+             IF(go%indices(ii) == go%indices(jj))THEN
+                CALL abort("Duplicate index in "//chaintag//" of <"//go_block//">")
+             END IF
+             
+          END IF
+       END DO
+    END DO
+    ! check for negative indices
+    IF(MINVAL(go%indices) < 1)THEN
+       CALL abort_value(chaintag, go_block)
+    END IF
+    
+
+    DO ii = 1, n_lines ! loop over the lines of data
+       CALL tokenize(data(1:lwidths(ii),ii)," ",tokens,twidths)
+       n_tokens = SIZE(tokens(:))
+
+       t_ind = 1
+       readtag = tokens(t_ind)
+       t_ind2 = 2
+
+       IF(n_tokens > 1)THEN
+          
+          ! compare the tags to known keywords
+          SELECT CASE(readtag(1:twidths(t_ind)))
+             
+          CASE(chaintag) ! chain indices
+            
+          CASE(masstag) ! chain masses
+             IF(n_tokens-1 /= go%length)THEN
+                CALL abort_value(masstag, go_block)
+             END IF
+             READ(tokens(t_ind2:n_tokens),*,IOSTAT=iostat) go%mass_chain
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(lengthstag) ! chain eq. bond lengths
+             IF(n_tokens /= go%length)THEN
+                CALL abort_value(lengthstag, go_block)
+             END IF
+             READ(tokens(t_ind2:n_tokens),*,IOSTAT=iostat) go%r_chain
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(bondanglestag) ! chain eq. bend angles
+             IF(n_tokens+1 /= go%length)THEN
+                CALL abort_value(bondanglestag, go_block)
+             END IF
+             READ(tokens(t_ind2:n_tokens),*,IOSTAT=iostat) go%theta_chain
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(torsionanglestag) ! chain eq. torsion angles
+             IF(n_tokens+2 /= go%length)THEN
+                CALL abort_value(torsionanglestag, go_block)
+             END IF
+             READ(tokens(t_ind2:n_tokens),*,IOSTAT=iostat) go%phi_chain
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(r_repulsivetag) ! repulsive r
+             IF(n_tokens /= 2)THEN
+                CALL abort_value(r_repulsivetag, go_block)
+             END IF
+             READ(tokens(t_ind2),*,IOSTAT=iostat) go%r_rep
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(sigma_mbtag) ! MB-Go sigma
+             IF(n_tokens /= 2)THEN
+                CALL abort_value(sigma_mbtag, go_block)
+             END IF
+             READ(tokens(t_ind2),*,IOSTAT=iostat) go%sigma
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(eps_nativetag) ! native epsilon
+             IF(n_tokens /= 2)THEN
+                CALL abort_value(eps_nativetag, go_block)
+             END IF
+             READ(tokens(t_ind2),*,IOSTAT=iostat) go%epsilon
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(eps_mbtag) ! chain epsilon
+             IF(n_tokens-1 /= go%length)THEN
+                CALL abort_value(eps_mbtag, go_block)
+             END IF
+             READ(tokens(t_ind2:n_tokens),*,IOSTAT=iostat) go%epsilon_water
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(krtag) ! k_r
+             IF(n_tokens /= 2)THEN
+                CALL abort_value(krtag, go_block)
+             END IF
+             READ(tokens(t_ind2),*,IOSTAT=iostat) go%kr
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(k_thetatag) ! k_theta
+             IF(n_tokens /= 2)THEN
+                CALL abort_value(k_thetatag, go_block)
+             END IF
+             READ(tokens(t_ind2),*,IOSTAT=iostat) go%ktheta
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(k_phi1tag) ! k_phi1
+             IF(n_tokens /= 2)THEN
+                CALL abort_value(k_phi1tag, go_block)
+             END IF
+             READ(tokens(t_ind2),*,IOSTAT=iostat) go%kphi1
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(k_phi2tag) ! k_phi2
+             IF(n_tokens /= 2)THEN
+                CALL abort_value(k_phi2tag, go_block)
+             END IF
+             READ(tokens(t_ind2),*,IOSTAT=iostat) go%kphi2
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+             
+          CASE(r_nativetag) ! native r
+             ! this is done in the next loop
+
+          CASE DEFAULT ! unrecognized tag
+             CALL write_typo(readtag(1:twidths(t_ind)),mb_block)
+          END SELECT
+       ELSE
+          CALL write_miss(tokens(1)(1:twidths(1)),mb_block)
+       END IF
+    END DO
+
+
+
+    ! The physical parameters must be defined, complain if they are not  
+    IF(MINVAL(go%r_chain) < 0)THEN
+       CALL abort_value(lengthstag, go_block)
+    END IF
+    IF(MINVAL(go%mass_chain) < 0.00000001d0)THEN
+       CALL abort_value(masstag, go_block)
+    END IF
+    DO WHILE(ii < go%length-1)
+       IF(go%theta_chain(ii) == missing_r)THEN
+          CALL abort_value(bondanglestag, go_block)
+       ELSE IF(go%theta_chain(ii) < 0.d0)THEN
+          go%theta_chain(ii) = -go%theta_chain(ii)
+       END IF
+    END DO
+    DO WHILE(ii < go%length-2)
+       IF(go%phi_chain(ii) == missing_r)THEN
+          CALL abort_value(torsionanglestag, go_block)
+       ELSE IF(go%phi_chain(ii) < 0.d0)THEN
+          go%phi_chain(ii) = -go%phi_chain(ii)
+       END IF
+    END DO
+    DO WHILE(ii < go%length)   
+       IF(go%epsilon_water(ii) == missing_r)THEN
+          CALL abort_value(eps_mbtag, go_block)
+       END IF
+    END DO
+    IF(go%r_rep == missing_r)THEN
+       CALL abort_value(r_repulsivetag, go_block)
+    END IF
+    IF(go%sigma == missing_r)THEN
+       CALL abort_value(sigma_mbtag, go_block)
+    END IF
+    IF(go%epsilon == missing_r)THEN
+       CALL abort_value(eps_nativetag, go_block)
+    END IF
+    IF(go%kr == missing_r)THEN
+       CALL abort_value(krtag, go_block)
+    END IF
+    IF(go%ktheta == missing_r)THEN
+       CALL abort_value(k_thetatag, go_block)
+    END IF
+    IF(go%kphi1 == missing_r)THEN
+       CALL abort_value(k_phi1tag, go_block)
+    END IF
+    IF(go%kphi2 == missing_r)THEN
+       CALL abort_value(k_phi2tag, go_block)
+    END IF
+
+    ALLOCATE(go%array_position(max_index))
+    go%array_position = -1
+    DO ii = 1, go%length
+       go%array_position(go%indices(ii)) = ii
+    END DO
+
+
+
+    DO ii = 1, n_lines ! loop over the lines of data
+       CALL tokenize(data(1:lwidths(ii),ii)," ",tokens,twidths)
+       n_tokens = SIZE(tokens(:))
+
+       t_ind = 1
+       readtag = tokens(t_ind)
+       t_ind2 = 2
+
+       IF(n_tokens > 1)THEN
+          
+          ! compare the tags to known keywords
+          SELECT CASE(readtag(1:twidths(t_ind)))
+             
+          CASE(r_nativetag) ! native r
+             IF(n_tokens /= 4)THEN
+                CALL abort_value(r_nativetag, go_block)
+             END IF
+             READ(tokens(t_ind2),*,IOSTAT=iostat) index1
+             READ(tokens(t_ind2+1),*,IOSTAT=iostat) index2
+!!$             WRITE(*,*) "indices ", index1, index2, maxval(go%indices)
+!!$             WRITE(*,*) "arrays  ", go%array_position(index1), go%array_position(index2)
+!!$             WRITE(*,*) go%indices
+!!$             WRITE(*,*) go%array_position
+
+             IF(index1 < 1 .or. index1 > MAXVAL(go%indices))THEN
+                CALL abort_value(r_nativetag, go_block)
+             END IF
+             IF(index2 < 1 .or. index2 > MAXVAL(go%indices))THEN
+                CALL abort_value(r_nativetag, go_block)
+             END IF
+             IF(go%array_position(index1) < 1 .or. go%array_position(index2) < 1)THEN
+                CALL abort_value(r_nativetag, go_block)
+             END IF
+             IF(go%array_position(index1)-go%array_position(index2) < 3 .and. &
+                  go%array_position(index1)-go%array_position(index2) > -3)THEN
+                CALL abort_value(r_nativetag, go_block)
+             END IF
+             READ(tokens(t_ind2+2),*,IOSTAT=iostat) go%r_native( go%array_position(index1),&
+                   go%array_position(index2) )
+             go%r_native(go%array_position(index2),go%array_position(index1)) = &
+                  go%r_native(go%array_position(index1),go%array_position(index2))
+             IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
+
+          END SELECT
+       ELSE
+          CALL write_miss(tokens(1)(1:twidths(1)),mb_block)
+       END IF
+    END DO
+
+
+    IF(associated(tokens))THEN
+       DEALLOCATE(tokens)
+    END IF
+    NULLIFY(tokens)
+    IF(associated(twidths))THEN
+       DEALLOCATE(twidths)
+    END IF
+    NULLIFY(twidths)
+
+    RETURN
+  END SUBROUTINE parse_go
+
+
+
   ! parses information in the "cell" block. 
   ! that is, reads supercell dimensions, possible multiplers
   ! and boundary types.
@@ -1653,18 +2133,20 @@ CONTAINS
   ! *mbs list of mb molecules
   ! *ats list of atoms
   ! *found_types the number of atoms of each type
-  SUBROUTINE parse_particles(data,lwidths,n_elems,mbs,ats,params,found_types)
+  SUBROUTINE parse_particles(data,lwidths,n_elems,mbs,ats,gos,params,go,found_types)
     IMPLICIT NONE
     CHARACTER, INTENT(IN) :: data(:,:)
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     TYPE(mbps), INTENT(IN) :: params
+    TYPE(gops), INTENT(IN) :: go
     CHARACTER(LEN=100), POINTER :: tokens(:)
     INTEGER, INTENT(IN) :: lwidths(:)
     INTEGER, INTENT(INOUT) :: n_elems
     INTEGER, POINTER :: twidths(:)
-    INTEGER :: ii, jj, imbs, iats, iostat, &
-         n_lines, n_tokens, n_mbs, n_ats, t_ind, n_found, xyznumber
+    INTEGER :: ii, jj, imbs, iats, igos, iostat, tmp_index, &
+         n_lines, n_tokens, n_mbs, n_ats, n_gos, t_ind, n_found, xyznumber
     CHARACTER(LEN=100) :: readtag
     LOGICAL :: foundlabel
     INTEGER, ALLOCATABLE :: exhausted_indices(:)
@@ -1673,6 +2155,7 @@ CONTAINS
     n_lines = SIZE(data(1,:))
     n_mbs = 0
     n_ats = 0
+    n_gos = 0
     IF(n_elems > 0)THEN
        ALLOCATE(found_types(n_elems))
        found_types = 0
@@ -1718,6 +2201,9 @@ CONTAINS
           IF(readtag(1:labelw) == mbname)THEN ! this line defines an MB molecule
              n_mbs = n_mbs+1
              foundlabel = .true.
+          ELSE IF(readtag(1:labelw) == goname)THEN ! this line defines a GO particle
+             n_gos = n_gos+1
+             foundlabel = .true.
           ELSE ! this line defines an atomic particle
              IF(n_elems == 0) CALL abort("Only MB molecules defined, yet other particles found")
              label: DO jj = 1, SIZE(params%atomic_labels(:)) ! find the label from the list of elements
@@ -1749,16 +2235,23 @@ CONTAINS
        END IF       
     END IF
 
+    IF(n_gos /= go%length)THEN
+       CALL abort("Number of go particles does not match!")
+    END IF
+
     ! allocate particle arrays
     NULLIFY(mbs)
     NULLIFY(ats)
+    NULLIFY(gos)
     ALLOCATE(mbs(n_mbs))
     ALLOCATE(ats(n_ats))
-    ALLOCATE(exhausted_indices(n_mbs+n_ats))
+    ALLOCATE(gos(n_gos))
+    ALLOCATE(exhausted_indices(n_mbs+n_ats+n_gos))
     exhausted_indices = 0
 
     imbs = 0
     iats = 0
+    igos = 0
     DO ii = 1, n_lines ! loop over the particles once more - now read and assign positions and orientations
        CALL tokenize(data(1:lwidths(ii),ii)," ",tokens,twidths)
        n_tokens = SIZE(tokens(:))
@@ -1775,7 +2268,7 @@ CONTAINS
              IF(iostat /= 0) CALL abort("Reading indices in <"//pos_block//">")
              IF(mbs(imbs)%index < 1) CALL abort("negative particle index")
              ! make sure no index is repeated
-             icheck: DO jj = 1, n_mbs+n_ats
+             icheck: DO jj = 1, n_mbs+n_ats+n_gos
                 IF(mbs(imbs)%index == exhausted_indices(jj)) &
                      CALL abort("Repeated index in <"//pos_block//">")
              END DO icheck
@@ -1814,6 +2307,50 @@ CONTAINS
                 CALL rand_unit_quaternion(mbs(imbs)%orientation)
              END IF
 
+
+          ! GO-particle
+          ELSE IF(readtag(1:labelw) == goname)THEN
+             ! index
+             READ(tokens(1),*,IOSTAT=iostat) tmp_index
+             IF(iostat /= 0) CALL abort("Reading indices in <"//pos_block//">")
+             IF(tmp_index < 1) CALL abort("negative particle index")
+             ! make sure no index is repeated
+             jcheck: DO jj = 1, n_mbs+n_ats+n_gos
+                IF(tmp_index == exhausted_indices(jj)) &
+                     CALL abort("Repeated index in <"//pos_block//">")
+             END DO jcheck
+             ! make sure the go particle is listed in <go>
+!!$             igos = -1
+!!$             gocheck: DO jj = 1, go%length
+!!$                IF(go%indices(jj) == tmp_index)THEN
+!!$                   igos = jj
+!!$                   EXIT gocheck
+!!$                END IF 
+!!$             END DO gocheck
+             igos = go%array_position(tmp_index)
+             IF(igos < 1)THEN
+                CALL abort("GO particle found with an index not listed in <"//go_block//">")
+             END IF
+
+             gos(igos)%index = tmp_index
+
+             ! remember that this index was used
+             exhausted_indices(ii) = gos(igos)%index
+             IF(n_tokens > 4)THEN
+                ! position
+                READ(tokens(3),*,IOSTAT=iostat) gos(igos)%pos(1)
+                IF(iostat /= 0) CALL abort("Reading positions in <"//pos_block//">")
+                READ(tokens(4),*,IOSTAT=iostat) gos(igos)%pos(2)
+                IF(iostat /= 0) CALL abort("Reading positions in <"//pos_block//">")
+                READ(tokens(5),*,IOSTAT=iostat) gos(igos)%pos(3)
+                IF(iostat /= 0) CALL abort("Reading positions in <"//pos_block//">")
+                
+                gos(igos)%inipos = gos(igos)%pos
+               
+             ELSE
+                CALL abort("Found particle with undefined position")
+             END IF
+
           ELSE ! atom
              
              ! type
@@ -1831,7 +2368,7 @@ CONTAINS
              IF(iostat /= 0) CALL abort("Reading indices in <"//pos_block//">")
              IF(ats(iats)%index < 1) CALL abort("negative particle index")
              ! make sure no index is repeated
-             icheckb: DO jj = 1, n_mbs+n_ats
+             icheckb: DO jj = 1, n_mbs+n_ats+n_gos
                 IF(ats(iats)%index == exhausted_indices(jj)) &
                      CALL abort("Repeated index in <"//pos_block//">")
              END DO icheckb
@@ -1862,6 +2399,9 @@ CONTAINS
        mbs(ii)%m_tot = params%m_mol
        mbs(ii)%m_inert = params%i_mol
     END DO
+    DO ii = 1, n_gos
+       gos(ii)%mass = go%mass_chain(ii)
+    END DO
     DO ii = 1, n_ats
        ats(ii)%mass = params%m_atoms(ats(ii)%type)
     END DO
@@ -1889,28 +2429,32 @@ CONTAINS
   ! *ats list of atoms
   ! *rnd_mb logic list, true for mb molecules that should have their velocity assigned randomly
   ! *rnd_at logic list, true for atoms that should have their velocity assigned randomly
-  SUBROUTINE parse_velocities(data,lwidths,mbs,ats,rnd_mb,rnd_at)
+  SUBROUTINE parse_velocities(data,lwidths,mbs,ats,gos,rnd_mb,rnd_at,rnd_go)
     IMPLICIT NONE
     CHARACTER, INTENT(IN) :: data(:,:)
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     CHARACTER(LEN=100), POINTER :: tokens(:)
     INTEGER, INTENT(IN) :: lwidths(:)
     INTEGER, POINTER :: twidths(:)
     INTEGER :: ii, jj, index, p_ind, iostat, sind, eind, &
-         n_lines, n_tokens, n_mbs, n_ats, t_ind
-    LOGICAL, POINTER :: rnd_mb(:,:), rnd_at(:)
-    LOGICAL :: is_mb
+         n_lines, n_tokens, n_mbs, n_ats, n_gos, t_ind
+    LOGICAL, POINTER :: rnd_mb(:,:), rnd_at(:), rnd_go(:)
+    LOGICAL :: is_mb, is_go
 
     n_lines = SIZE(data(1,:))
     n_mbs = mbs_size(mbs)
     n_ats = ats_size(ats)
+    n_gos = gos_size(gos)
 
     ! logic arrays for showing which velocities should be assigned randomly
     ALLOCATE(rnd_mb(n_mbs,2))
     rnd_mb = .true.
     ALLOCATE(rnd_at(n_ats))
     rnd_at = .true.
+    ALLOCATE(rnd_go(n_gos))
+    rnd_go = .true.
 
     DO ii = 1, n_lines ! loop over the lines of data
        CALL tokenize(data(1:lwidths(ii),ii)," ",tokens,twidths)
@@ -1936,6 +2480,7 @@ CONTAINS
 
              ! search the particle with the given index
              is_mb = .false.
+             is_go = .false.
              p_ind = 0
              searchmb: DO jj = 1, n_mbs
                 IF(mbs(jj)%index == index)THEN
@@ -1944,14 +2489,24 @@ CONTAINS
                    EXIT searchmb
                 END IF
              END DO searchmb
-             
+
              IF(.NOT.is_mb)THEN
-                searchat: DO jj = 1, n_ats
-                   IF(ats(jj)%index == index)THEN
+                searchgo: DO jj = 1, n_gos
+                   IF(gos(jj)%index == index)THEN
                       p_ind = jj
-                      EXIT searchat
+                      is_go = .true.
+                      EXIT searchgo
                    END IF
-                END DO searchat
+                END DO searchgo
+                
+                IF(.NOT.is_go)THEN
+                   searchat: DO jj = 1, n_ats
+                      IF(ats(jj)%index == index)THEN
+                         p_ind = jj
+                         EXIT searchat
+                      END IF
+                   END DO searchat
+                END IF
              END IF
              
              IF(p_ind == 0) &
@@ -1984,6 +2539,25 @@ CONTAINS
                 ELSE
                    rnd_mb(p_ind,2) = .true. ! random angular velocity needed (though, this should have been true already)
                 END IF                
+
+             ELSE IF(is_go)THEN
+                rnd_go(p_ind) = .false. ! no need for random velocity
+                
+                IF(n_tokens > t_ind+1)THEN
+                   ! velocity
+                   READ(tokens(t_ind),*,IOSTAT=iostat) gos(p_ind)%vel(1)
+                   IF(iostat /= 0) CALL abort("reading initial velocities")
+                   READ(tokens(t_ind+1),*,IOSTAT=iostat) gos(p_ind)%vel(2)
+                   IF(iostat /= 0) CALL abort("reading initial velocities")
+                   READ(tokens(t_ind+2),*,IOSTAT=iostat) gos(p_ind)%vel(3)
+                   IF(iostat /= 0) CALL abort("reading initial velocities")
+                ELSE
+                   CALL abort("reading initial velocities")
+                END IF
+                IF(n_tokens > t_ind+4)THEN ! if an atomic particle has extra data, print a warning
+                   IF(CPU_ID == MASTER_CPU) WRITE(*,*) "Extra data found for a go particle in <"//vel_block//">."
+                   IF(CPU_ID == MASTER_CPU) WRITE(*,*) "Are you sure the data is not meant for a MB molecule?"
+                END IF
 
              ELSE ! atom
                 rnd_at(p_ind) = .false. ! no need for random velocity
@@ -2033,27 +2607,36 @@ CONTAINS
   ! *params physical parameters
   ! *mbs list of mb molecules
   ! *ats list of atoms
-  SUBROUTINE parse_constraints(data,lwidths,mbs,ats)
+  SUBROUTINE parse_constraints(data,lwidths,mbs,ats,gos)
     IMPLICIT NONE
     CHARACTER, INTENT(IN) :: data(:,:)
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     CHARACTER(LEN=100), POINTER :: tokens(:)
     INTEGER, INTENT(IN) :: lwidths(:)
     INTEGER, POINTER :: twidths(:)
     INTEGER :: ii, jj, iostat, index, p_ind, sind, eind,&
-         n_lines, n_tokens, n_mbs, n_ats, t_ind, t_ind2, t_ind_0
-    LOGICAL :: is_mb
+         n_lines, n_tokens, n_mbs, n_ats, n_gos, t_ind, t_ind2, t_ind_0
+    LOGICAL :: is_mb, is_go
 
     n_lines = SIZE(data(1,:))
     n_mbs = mbs_size(mbs)
     n_ats = ats_size(ats)
+    n_gos = gos_size(gos)
 
     ! initialize first to no constraints
     DO ii = 1, n_mbs ! loop over mbs
        DO jj = 1, 3 ! loop over x, y, z
           mbs(ii)%constrained(jj) = no_constr_index
           mbs(ii)%well(jj) = 0.d0
+       END DO
+    END DO
+    ! initialize first to no constraints
+    DO ii = 1, n_gos ! loop over mbs
+       DO jj = 1, 3 ! loop over x, y, z
+          gos(ii)%constrained(jj) = no_constr_index
+          gos(ii)%well(jj) = 0.d0
        END DO
     END DO
     DO ii = 1, n_ats ! loop over atoms
@@ -2099,12 +2682,20 @@ CONTAINS
              END DO searchmb
 
              IF(.NOT.is_mb)THEN ! if no mb with the given index was found, search in atoms
-                searchat: DO jj = 1, n_ats ! loop over atoms
-                   IF(ats(jj)%index == index)THEN
+                searchgo: DO jj = 1, n_gos ! loop over atoms
+                   IF(gos(jj)%index == index)THEN
                       p_ind = jj
-                      EXIT searchat
+                      EXIT searchgo
                    END IF
-                END DO searchat
+                END DO searchgo
+                IF(.NOT.is_go)THEN ! if no mb with the given index was found, search in atoms
+                   searchat: DO jj = 1, n_ats ! loop over atoms
+                      IF(ats(jj)%index == index)THEN
+                         p_ind = jj
+                         EXIT searchat
+                      END IF
+                   END DO searchat
+                END IF
              END IF
           
              IF(p_ind == 0) & ! the index was not found
@@ -2153,6 +2744,57 @@ CONTAINS
                       mbs(p_ind)%constrained(jj) = ext_force_index
                       ! read force strength
                       READ(tokens(t_ind2)(1:twidths(t_ind2)),*,IOSTAT=iostat) mbs(p_ind)%well(jj)
+                      IF(iostat /= 0) CALL abort("reading constraints")
+                      
+                   CASE DEFAULT ! unrecognized tag
+                      CALL abort("unrecognized constraint "//tokens(t_ind)(1:twidths(t_ind)))
+
+                   END SELECT
+
+                END DO
+
+             ELSE IF(is_go)THEN
+                t_ind2 = t_ind_0 - 1
+                DO jj = 1, 3 ! x, y, z
+                   t_ind = t_ind2 + 1
+                   t_ind2 = t_ind
+                   
+                   ! type of constraint
+                   SELECT CASE(tokens(t_ind)(1:twidths(t_ind)))
+                   CASE(freetag) ! no constraint
+                      gos(p_ind)%constrained(jj) = no_constr_index
+                      gos(p_ind)%well(jj) = 0.d0
+                      
+                   CASE(frozentag) ! frozen degrees of freedom
+                      t_ind2 = t_ind + 1
+                      SELECT CASE(tokens(t_ind2)(1:twidths(t_ind2)))
+                      CASE(postag) ! position frozen
+                         gos(p_ind)%constrained(jj) = frozen_pos_index
+                         gos(p_ind)%well(jj) = 0.d0
+                      CASE(alltag) ! pos + orientation frozen
+                         gos(p_ind)%constrained(jj) = all_frozen_index
+                         gos(p_ind)%well(jj) = 0.d0
+                      CASE(veltag) ! velocity frozen
+                         gos(p_ind)%constrained(jj) = frozen_vel_index
+                         gos(p_ind)%well(jj) = 0.d0      
+                      CASE DEFAULT ! unrecognized tag
+                         CALL abort("unrecognized constraint "//tokens(t_ind2)(1:twidths(t_ind2)))
+                      END SELECT
+                      
+                   CASE(welltag) ! harmonic well
+                      t_ind2 = t_ind + 1
+                      gos(p_ind)%constrained(jj) = harmonic_well_index
+                      ! read spring constant
+                      READ(tokens(t_ind2)(1:twidths(t_ind2)),*,IOSTAT=iostat) gos(p_ind)%well(jj)
+                      IF(iostat /= 0) CALL abort("reading constraints")
+                      IF(gos(p_ind)%well(jj) < 0.d0) &
+                           CALL abort("negative spring constant in <"//constr_block//">")
+                      
+                   CASE(forcetag) ! external force
+                      t_ind2 = t_ind + 1
+                      gos(p_ind)%constrained(jj) = ext_force_index
+                      ! read force strength
+                      READ(tokens(t_ind2)(1:twidths(t_ind2)),*,IOSTAT=iostat) gos(p_ind)%well(jj)
                       IF(iostat /= 0) CALL abort("reading constraints")
                       
                    CASE DEFAULT ! unrecognized tag
@@ -2544,17 +3186,18 @@ CONTAINS
   ! *control control parameters
   ! *mbs list of molecules
   ! *ats list of atoms
-  SUBROUTINE parse_statistics(data,lwidths,control,mbs,ats)
+  SUBROUTINE parse_statistics(data,lwidths,control,mbs,ats,gos)
     IMPLICIT NONE
     CHARACTER, INTENT(IN) :: data(:,:)
     TYPE(cps), INTENT(INOUT) :: control
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     CHARACTER(LEN=100), POINTER :: tokens(:)
     INTEGER, INTENT(IN) :: lwidths(:)
     INTEGER, POINTER :: twidths(:)
     INTEGER :: ii, jj, kk, ll, iostat, n_lines, n_tokens, firstindex, lastindex, &
-         i_stat, n_mbs, n_ats, t_ind, t_ind2, t_ind3, tempindex, maxgroup, groupsize, &
+         i_stat, n_mbs, n_ats, n_gos, t_ind, t_ind2, t_ind3, tempindex, maxgroup, groupsize, &
          group_ind, max_n_stats
 
     n_lines = SIZE(data(1,:))
@@ -2599,6 +3242,7 @@ CONTAINS
 
     n_mbs = mbs_size(mbs)
     n_ats = ats_size(ats)
+    n_gos = gos_size(gos)
     maxgroup = 0
 
     group_ind = 0
@@ -2911,6 +3555,14 @@ CONTAINS
                       END IF
                    END DO findmbA
                    IF(control%adf_follow == 0)THEN
+                      findgoA: DO kk = 1, n_gos
+                         IF(gos(kk)%index == tempindex)THEN
+                            control%adf_follow = -kk ! **this is a conflict with atoms**
+                            EXIT findgoA
+                         END IF
+                      END DO findgoA
+                   END IF
+                   IF(control%adf_follow == 0)THEN
                       findatA: DO kk = 1, n_ats
                          IF(ats(kk)%index == tempindex)THEN
                             control%adf_follow = -kk
@@ -3046,6 +3698,14 @@ CONTAINS
                 END IF
              END DO findmb1
              IF(control%stat_particles(i_stat,group_ind) == 0)THEN
+                findgo1: DO kk = 1, n_gos
+                   IF(gos(kk)%index == jj)THEN
+                      control%stat_particles(i_stat,group_ind) = -kk ! **this is a conflict with atoms**
+                      EXIT findgo1
+                   END IF
+                END DO findgo1
+             END IF
+             IF(control%stat_particles(i_stat,group_ind) == 0)THEN
                 findat1: DO kk = 1, n_ats
                    IF(ats(kk)%index == jj)THEN
                       control%stat_particles(i_stat,group_ind) = -kk
@@ -3103,6 +3763,14 @@ CONTAINS
                    EXIT findmb3
                 END IF
              END DO findmb3
+             IF(control%stat_particles(i_stat,group_ind) == 0)THEN
+                findgo3: DO kk = 1, n_gos
+                   IF(gos(kk)%index == jj)THEN
+                      control%stat_particles(i_stat,group_ind) = -kk ! **this is a conflict with atoms**
+                      EXIT findgo3
+                   END IF
+                END DO findgo3
+             END IF
              IF(control%stat_particles(i_stat,group_ind) == 0)THEN
                 findat3: DO kk = 1, n_ats
                    IF(ats(kk)%index == jj)THEN
@@ -3189,6 +3857,14 @@ CONTAINS
                 END IF
              END DO findmb6
              IF(control%stat_particles(i_stat,group_ind) == 0)THEN
+                findgo6: DO kk = 1, n_gos
+                   IF(gos(kk)%index == jj)THEN
+                      control%stat_particles(i_stat,group_ind) = -kk ! **this is a conflict with atoms**
+                      EXIT findgo6
+                   END IF
+                END DO findgo6
+             END IF
+             IF(control%stat_particles(i_stat,group_ind) == 0)THEN
                 findat6: DO kk = 1, n_ats
                    IF(ats(kk)%index == jj)THEN
                       control%stat_particles(i_stat,group_ind) = -kk
@@ -3251,6 +3927,14 @@ CONTAINS
                    END IF
                 END DO findmb8
                 IF(control%stat_groups(groupsize,i_stat,group_ind) == 0)THEN
+                   findgo8: DO kk = 1, n_gos
+                      IF(gos(kk)%index == firstindex)THEN
+                         control%stat_groups(groupsize,i_stat,group_ind) = -kk ! **this is a conflict with atoms**
+                         EXIT findgo8
+                      END IF
+                   END DO findgo8
+                END IF
+                IF(control%stat_groups(groupsize,i_stat,group_ind) == 0)THEN
                    findat8: DO kk = 1, n_ats
                       IF(ats(kk)%index == firstindex)THEN
                          control%stat_groups(groupsize,i_stat,group_ind) = -kk
@@ -3278,6 +3962,14 @@ CONTAINS
                                EXIT findmb9
                             END IF
                          END DO findmb9
+                         IF(control%stat_groups(groupsize,i_stat,group_ind) == 0)THEN
+                            findgo9: DO kk = 1, n_gos
+                               IF(gos(kk)%index == jj)THEN
+                                  control%stat_groups(groupsize,i_stat,group_ind) = -kk ! **this is a conflict with atoms**
+                                  EXIT findgo9
+                               END IF
+                            END DO findgo9
+                         END IF
                          IF(control%stat_groups(groupsize,i_stat,group_ind) == 0)THEN
                             findat9: DO kk = 1, n_ats
                                IF(ats(kk)%index == jj)THEN
