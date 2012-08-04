@@ -152,7 +152,8 @@ PROGRAM cashew
        atat_neighbors(:,:), atat_n_nbors(:)
   !LOGICAL, POINTER :: pair_done(:,:), atom_pair_done(:,:) ! to prevent double counting (obsolete)
   REAL(KIND=dp) :: e_pot,e_lenjon,e_bonds, e_mbat, e_atat, e_constr, e_kin, &
-       e_lin, e_rot, last_e ! energy components
+       e_lin, e_rot, last_e, & ! energy components
+       e_mbgo, e_go,  e_stretch, e_bend, e_torsion, e_native, e_nonnat
   REAL(KIND=dp), POINTER :: mb_forces(:,:), mb_torques(:,:), atom_forces(:,:), & ! forces
        go_forces(:,:), old_go_forces(:,:), go_conj_forces(:,:), &
        old_mb_forces(:,:), old_mb_torques(:,:), old_atom_forces(:,:), & ! conjugate gradients
@@ -192,6 +193,8 @@ PROGRAM cashew
   
   ! general
   INTEGER :: i, j, k
+
+  REAL(KIND=dp) :: shifty, nep(3), nem(3)
 
 
   !**********************
@@ -289,46 +292,6 @@ PROGRAM cashew
 
 
 
-  write(*,*) "did we read the go particles correctly?"
-  write(*,*) "go params"
-  write(*,*) "  length:   ", go_params%length
-  write(*,*) "  indices:  ", go_params%indices
-  write(*,*) "  array:    ", go_params%array_position
-  write(*,*) "  rs:       ", go_params%r_chain
-  write(*,*) "  thetas:   ", go_params%theta_chain
-  write(*,*) "  phis:     ", go_params%phi_chain
-  write(*,*) "  mb eps:   ", go_params%epsilon_water
-  write(*,*) "  r rep:    ", go_params%r_rep
-  write(*,*) "  sigma:    ", go_params%sigma
-  write(*,*) "  eps:      ", go_params%epsilon
-  write(*,*) "  k r:      ", go_params%kr
-  write(*,*) "  k theta:  ", go_params%ktheta
-  write(*,*) "  k phi 1:  ", go_params%kphi1
-  write(*,*) "  k phi 2:  ", go_params%kphi2
-  do i = 1, n_gos
-     do j = 1, n_gos
-        if(go_params%r_native(i,j) > 0.d0)then
-           write(*,*) "  r native: ", i,j,go_params%r_native(i,j)
-        end if
-     end do
-  end do
-
-  do i = 1, n_gos
-     write(*,*) "go particle ", i
-     write(*,*) "  index: ", gos(i)%index
-     write(*,*) "  pos:   ", gos(i)%pos
-     write(*,*) "  vel:   ", gos(i)%vel
-     write(*,*) "  mass:  ", gos(i)%mass
-     write(*,*) "  inipos:", gos(i)%inipos
-     write(*,*) "  well:  ", gos(i)%well
-     write(*,*) "  constr:", gos(i)%constrained
-  end do
-
-
-
-
-
-
   ! if bond monitoring is requested, allocate arrays for that
   IF(control_params%bond_writer /= noxyz_index)THEN
      ALLOCATE(n_bond(n_mols))
@@ -367,7 +330,7 @@ PROGRAM cashew
   END IF
 
   ! Initialize arrays needed by the parallellization machinery
-  CALL set_particles(n_mols,n_ats)
+  CALL set_particles(n_mols,n_ats,n_gos)
   ! Determine the initial workload split. That is, find
   ! suitable sets of particles that each cpu should handle in
   ! the parallellized parts of the program.
@@ -397,22 +360,91 @@ PROGRAM cashew
 
   ! Calculate different types of energy and deduce temperature, pressure etc.
   press = 0.d0
-  CALL kin_energy(molecules,atoms,n_freedom,e_kin,temps,e_lin,e_rot)
-  CALL pot_energy(molecules,atoms,mbmb_neighbors,mbmb_n_nbors,&
+  CALL kin_energy(molecules,atoms,gos,n_freedom,e_kin,temps,e_lin,e_rot)
+  CALL pot_energy(molecules,atoms,gos,mbmb_neighbors,mbmb_n_nbors,&
        mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
+       mbgo_neighbors,mbgo_n_nbors, &
        mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,&
-       physical_params,is_constrained,&
-       e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr)
+       physical_params,go_params,is_constrained,&
+       e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr,&
+       e_mbgo, e_go, e_stretch, e_bend, e_torsion, e_native, e_nonnat)
 
   ! Calculate initial forces
-  CALL calc_forces(molecules,atoms,&
+  CALL calc_forces(molecules,atoms,gos,&
        mbmb_neighbors,mbmb_n_nbors,mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
-       mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,control_params,physical_params,&
+       mbgo_neighbors,mbgo_n_nbors, &
+       mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,&
+       control_params,physical_params,go_params,&
        is_constrained,.false.,&
-       mb_forces,mb_torques,atom_forces,virial,n_bond)
+       mb_forces,mb_torques,atom_forces,go_forces,virial,n_bond)
+
+!!$  ! numerically calculate forces for debugging
+!!$  shifty = 0.0001
+!!$  do i = 1, 1
+!!$     do j = 1, 3
+!!$        molecules(i)%pos(j) = molecules(i)%pos(j)+shifty
+!!$        CALL pot_energy(molecules,atoms,gos,mbmb_neighbors,mbmb_n_nbors,&
+!!$             mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
+!!$             mbgo_neighbors,mbgo_n_nbors, &
+!!$             mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,&
+!!$             physical_params,go_params,is_constrained,&
+!!$             e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr,&
+!!$             e_mbgo, e_go, e_stretch, e_bend, e_torsion, e_native, e_nonnat)
+!!$        nep(j) = e_pot
+!!$        molecules(i)%pos(j) = molecules(i)%pos(j)-2.d0*shifty
+!!$        CALL pot_energy(molecules,atoms,gos,mbmb_neighbors,mbmb_n_nbors,&
+!!$             mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
+!!$             mbgo_neighbors,mbgo_n_nbors, &
+!!$             mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,&
+!!$             physical_params,go_params,is_constrained,&
+!!$             e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr,&
+!!$             e_mbgo, e_go, e_stretch, e_bend, e_torsion, e_native, e_nonnat)
+!!$        nem(j) = e_pot
+!!$        molecules(i)%pos(j) = molecules(i)%pos(j)+shifty
+!!$     end do
+!!$     write(*,*) "numeric and analytic force for mb ", i
+!!$     write(*,'(F20.10,F20.10,F20.10)') &
+!!$          -(nep(1)-nem(1))/(2.d0*shifty), &
+!!$          -(nep(2)-nem(2))/(2.d0*shifty), &
+!!$          -(nep(3)-nem(3))/(2.d0*shifty)
+!!$     write(*,'(F20.10,F20.10,F20.10)') &
+!!$          mb_forces(1:3,i)
+!!$  end do
+!!$  do i = 1, 5
+!!$     do j = 1, 3
+!!$        gos(i)%pos(j) = gos(i)%pos(j)+shifty
+!!$        CALL pot_energy(molecules,atoms,gos,mbmb_neighbors,mbmb_n_nbors,&
+!!$             mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
+!!$             mbgo_neighbors,mbgo_n_nbors, &
+!!$             mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,&
+!!$             physical_params,go_params,is_constrained,&
+!!$             e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr,&
+!!$             e_mbgo, e_go, e_stretch, e_bend, e_torsion, e_native, e_nonnat)
+!!$        nep(j) = e_pot
+!!$        gos(i)%pos(j) = gos(i)%pos(j)-2.d0*shifty
+!!$        CALL pot_energy(molecules,atoms,gos,mbmb_neighbors,mbmb_n_nbors,&
+!!$             mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
+!!$             mbgo_neighbors,mbgo_n_nbors, &
+!!$             mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,&
+!!$             physical_params,go_params,is_constrained,&
+!!$             e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr,&
+!!$             e_mbgo, e_go, e_stretch, e_bend, e_torsion, e_native, e_nonnat)
+!!$        nem(j) = e_pot
+!!$        gos(i)%pos(j) = gos(i)%pos(j)+shifty
+!!$     end do
+!!$     write(*,*) "numeric and analytic force for go ", i
+!!$     write(*,'(F20.10,F20.10,F20.10)') &
+!!$          -(nep(1)-nem(1))/(2.d0*shifty), &
+!!$          -(nep(2)-nem(2))/(2.d0*shifty), &
+!!$          -(nep(3)-nem(3))/(2.d0*shifty)
+!!$     write(*,'(F20.10,F20.10,F20.10)') &
+!!$          go_forces(1:3,i)
+!!$  end do
+
 
   ! conjugate gradients
   IF(control_params%md_algo == cg_index)THEN
+     CALL abort("conjugate gradient method has been disabled for this version of Cashew due to lack of support for go-particles")
      old_mb_forces = mb_forces
      old_mb_torques = mb_torques
      old_atom_forces = atom_forces
@@ -457,11 +489,12 @@ PROGRAM cashew
      
      ! write output: header
      CALL write_header(output,system_name(1:namelength-1),&
-          molecules,atoms,n_elements,n_types,tvector,&
-          physical_params,control_params,&
+          molecules,atoms,gos,n_elements,n_types,tvector,&
+          physical_params,control_params,go_params,&
           supercell,boundary_type,boundary_value,periodic_boundary,is_constrained,&
           e_kin,e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr,temps,&
-          mb_forces,mb_torques,atom_forces,&
+          e_mbgo, e_go, e_stretch, e_bend, e_torsion, e_native, e_nonnat, &
+          mb_forces,mb_torques,atom_forces,go_forces,&
           mbmb_neighbors,mbmb_n_nbors,mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors)
      
      ! printout
@@ -485,6 +518,15 @@ PROGRAM cashew
            WRITE(*,'(A,F20.4)') "     MB-atom potential:     ", e_mbat
            WRITE(*,'(A,F20.4)') "     atom-atom potential:   ", e_atat
         END IF
+       IF(n_gos > 0)THEN
+          WRITE(*,'(A,F20.4)') "     MB-GO potential:       ", e_mbgo
+          WRITE(*,'(A,F20.4)') "     GO-GO potential:       ", e_go
+          WRITE(*,'(A,F20.4)') "        GO stretching:      ", e_stretch
+          WRITE(*,'(A,F20.4)') "        GO bending:         ", e_bend
+          WRITE(*,'(A,F20.4)') "        GO torsion:         ", e_torsion
+          WRITE(*,'(A,F20.4)') "        GO native:          ", e_native
+          WRITE(*,'(A,F20.4)') "        GO non-native:      ", e_nonnat
+       END IF
         IF(is_constrained)THEN
            WRITE(*,'(A,F20.4)') "     constraint potential:  ", e_constr
         END IF
@@ -519,9 +561,9 @@ PROGRAM cashew
   ! dt/2 apart. So, advance initial velocities by dt/2
   ! Note: leapfrog is not fully implemented, one should use velocity-Verlet
   IF(control_params%md_algo == leapfrog_index)THEN
-     CALL update_velocities(molecules,atoms,n_mols,n_ats,&
-          mb_forces,mb_torques,atom_forces,&
-          physical_params,control_params,0.5d0,is_constrained)       
+     CALL update_velocities(molecules,atoms,gos,n_mols,n_ats,n_gos,&
+          mb_forces,mb_torques,atom_forces,go_forces,&
+          physical_params,control_params,go_params,0.5d0,is_constrained)       
   END IF
 
   ! cpu time checkpoint
@@ -630,7 +672,7 @@ PROGRAM cashew
           control_params%xyz_writer == sexyz_index .OR. &
           control_params%xyz_writer == ixyz_index )THEN
         CALL write_xyz(system_name(1:namelength-1)//".xyz",&
-             molecules,atoms,physical_params%l_oh,.true.)
+             molecules,atoms,gos,physical_params%l_oh,.true.)
      END IF
      ! write the initial configuration as bonds
      IF(control_params%bond_writer == sxyz_index .OR. &
@@ -644,8 +686,8 @@ PROGRAM cashew
           control_params%inp_writer == sexyz_index .OR. &
           control_params%inp_writer == ixyz_index )THEN
         CALL write_contfile(system_name(1:namelength-1)//CONT_START//"."//MB_IN,&
-             molecules,atoms,n_elements,&
-             physical_params,control_params,&
+             molecules,atoms,gos,n_elements,&
+             physical_params,control_params,go_params,&
              supercell,boundary_type,boundary_value,is_constrained)
      END IF
      
@@ -745,13 +787,14 @@ PROGRAM cashew
         !*********************
         ! Advance time in MD
         !*********************
-        CALL advance_time(molecules,atoms,n_mols,n_ats,&
-             mbmb_neighbors,mbmb_n_nbors,mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
-             boxed,boxes,box_mbs,box_ats,box_mb_count,box_at_count,&
+        CALL advance_time(molecules,atoms,gos,n_mols,n_ats,n_gos,&
+             mbmb_neighbors,mbmb_n_nbors,mbat_neighbors,mbat_n_nbors,&
+             atat_neighbors,atat_n_nbors,mbgo_neighbors,mbgo_n_nbors,&
+             boxed,boxes,box_mbs,box_ats,box_gos,box_mb_count,box_at_count,box_go_count,&
              mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,&
              is_constrained,&
-             mb_forces,mb_torques,atom_forces,virial,n_bond,&
-             physical_params,control_params,&
+             mb_forces,mb_torques,atom_forces,go_forces,virial,n_bond,&
+             physical_params,control_params,go_params,&
              drift,drift_range,simulation_time)
        
         ! if a barostat is in use, apply it
@@ -788,10 +831,10 @@ PROGRAM cashew
      ! write the final configuration to xyz
      IF(control_params%xyz_writer == exyz_index)THEN
         CALL write_xyz(system_name(1:namelength-1)//".xyz",&
-             molecules,atoms,physical_params%l_oh,.true.) ! only end xyz is written
+             molecules,atoms,gos,physical_params%l_oh,.true.) ! only end xyz is written
      ELSE IF(control_params%xyz_writer == sexyz_index )THEN
         CALL write_xyz(system_name(1:namelength-1)//".xyz",&
-             molecules,atoms,physical_params%l_oh,.false.) ! start xyz already exists
+             molecules,atoms,gos,physical_params%l_oh,.false.) ! start xyz already exists
      END IF
 
      ! write the final configuration as bonds
@@ -807,8 +850,8 @@ PROGRAM cashew
      IF(control_params%inp_writer == exyz_index .OR. &
           control_params%inp_writer == sexyz_index )THEN
         CALL write_contfile(system_name(1:namelength-1)//CONT_END//"."//MB_IN,&
-             molecules,atoms,n_elements,&
-             physical_params,control_params,&
+             molecules,atoms,gos,n_elements,&
+             physical_params,control_params,go_params,&
              supercell,boundary_type,boundary_value,is_constrained)
      END IF
      
@@ -912,19 +955,21 @@ CONTAINS
   ! *control control parameters (including the timestep)
   ! *drift the maximum change in a position coordinate. needed for optimal updating frequency of neighbors lists
   ! *clock virtual time of the simulation
-  SUBROUTINE advance_time(mbs,ats,n_mbs,n_ats,&
-       mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,&
-       boxed,boxes,box_mbs,box_ats,box_mc,box_ac,&
+  SUBROUTINE advance_time(mbs,ats,gos,n_mbs,n_ats,n_gos,&
+       mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,mg_nbors,mg_n_ns,&
+       boxed,boxes,box_mbs,box_ats,box_gos,box_mc,box_ac,box_gc,&
        bonds,cell,pbc,btype,bval,is_constr,&
-       m_force,m_torque,a_force,virial,n_bond,params,control,drift,drift_range,clock)
+       m_force,m_torque,a_force,g_force,virial,n_bond,params,control,go,drift,drift_range,clock)
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     TYPE(mbps), INTENT(IN) :: params
     TYPE(cps), INTENT(IN) :: control
-    REAL(KIND=dp), POINTER :: m_force(:,:), m_torque(:,:), a_force(:,:)
+    TYPE(gops), INTENT(IN) :: go
+    REAL(KIND=dp), POINTER :: m_force(:,:), m_torque(:,:), a_force(:,:), g_force(:,:)
     REAL(KIND=dp), INTENT(INOUT) :: drift, clock, virial
-    INTEGER, INTENT(IN) :: n_mbs, n_ats, btype(3)
+    INTEGER, INTENT(IN) :: n_mbs, n_ats, n_gos, btype(3)
     REAL(KIND=dp), INTENT(IN) :: cell(3), bval(3), drift_range
     LOGICAL, INTENT(IN) :: pbc(3), is_constr
     !LOGICAL, POINTER :: pair_done(:,:), atom_pair_done(:,:)
@@ -933,8 +978,9 @@ CONTAINS
          mm_nbors(:,:), mm_n_ns(:), &
          ma_nbors(:,:), ma_n_ns(:), &
          aa_nbors(:,:), aa_n_ns(:), &
-         box_mbs(:,:,:,:,:), box_ats(:,:,:,:,:), &
-         box_mc(:,:,:,:), box_ac(:,:,:,:)
+         mg_nbors(:,:), mg_n_ns(:), &
+         box_mbs(:,:,:,:,:), box_ats(:,:,:,:,:), box_gos(:,:,:,:,:),&
+         box_mc(:,:,:,:), box_ac(:,:,:,:), box_gc(:,:,:,:)
     INTEGER, INTENT(IN) :: boxes(3,2)
     LOGICAL, INTENT(IN) :: boxed
     REAL(KIND=dp) :: shift
@@ -946,8 +992,8 @@ CONTAINS
     IF(control%md_algo == velocity_verlet_index)THEN
 
        ! move by dt (from t to t+dt)
-       CALL move_particles(mbs,ats,n_mbs,n_ats,cell,pbc,&
-            m_force,m_torque,a_force,params,control,is_constr,shift)
+       CALL move_particles(mbs,ats,gos,n_mbs,n_ats,n_gos,cell,pbc,&
+            m_force,m_torque,a_force,g_force,params,control,go,is_constr,shift)
        ! keep account on how much particles move, for triggering neighbor list updating
        drift = drift+shift
 
@@ -966,10 +1012,10 @@ CONTAINS
 
        IF(drift > drift_range)THEN ! update neighbor lists if the particles have moved enough
           drift = 0.d0
-          CALL update_neighbors(mbs,ats,cell,pbc,bonds,&
-               boxed,boxes,box_mbs,box_ats,box_mc,box_ac,&
-               mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,&
-               params)
+          CALL update_neighbors(mbs,ats,gos,cell,pbc,bonds,&
+               boxed,boxes,box_mbs,box_ats,box_gos,box_mc,box_ac,box_gc,&
+               mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,mg_nbors,mg_n_ns,&
+               params,go)
        ELSE
           ! the bond numbers needed for calculating the bond-order
           ! term must be updated after each step
@@ -980,13 +1026,14 @@ CONTAINS
        CALL checkpoint(time_nbor,timeA,timeB) 
 
        ! update vel by dt/2 (from t to t+dt/2) with old forces (t)
-       CALL update_velocities(mbs,ats,n_mbs,n_ats,&
-            m_force,m_torque,a_force,params,control,0.5d0,is_constr)
+       CALL update_velocities(mbs,ats,gos,n_mbs,n_ats,n_gos,&
+            m_force,m_torque,a_force,g_force,params,control,go,0.5d0,is_constr)
 
        ! calculate new forces (t+dt) without thermostat
-       CALL calc_forces(mbs,ats,mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,&
-            bonds,cell,pbc,btype,bval,control,params,is_constr,.false.,&
-            m_force,m_torque,a_force,virial,n_bond)
+       CALL calc_forces(mbs,ats,gos,&
+            mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,mg_nbors,mg_n_ns,&
+            bonds,cell,pbc,btype,bval,control,params,go,is_constr,.false.,&
+            m_force,m_torque,a_force,g_force,virial,n_bond)
 
        ! cpu time checkpoint       
        CALL checkpoint(time_force,timeA,timeB)
@@ -994,39 +1041,39 @@ CONTAINS
        IF(control%md_thermo == langevin_index)THEN ! Langevin thermostat
 
           ! add random forces but no friction (t+dt)
-          CALL add_random_force(ats,n_mbs,n_ats,control,params,m_force,m_torque,a_force)
+          CALL add_random_force(ats,n_mbs,n_ats,n_gos,control,params,go,m_force,m_torque,a_force,g_force)
           ! cpu time checkpoint
           CALL checkpoint(time_force,timeA,timeB)
           
           ! update vel by dt/2 (from t+dt/2 to t+dt) with new forces (t+dt) with "future friction"
-          CALL update_velocities(mbs,ats,n_mbs,n_ats,&
-               m_force,m_torque,a_force,params,control,0.5d0,is_constr,.true.)
+          CALL update_velocities(mbs,ats,gos,n_mbs,n_ats,n_gos,&
+               m_force,m_torque,a_force,g_force,params,control,go,0.5d0,is_constr,.true.)
           ! cpu time checkpoint
           CALL checkpoint(time_move,timeA,timeB)
           
           ! add friction to the force (t+dt)
-          CALL add_friction_force(mbs,ats,n_mbs,n_ats,control,m_force,m_torque,a_force)
+          CALL add_friction_force(mbs,ats,gos,n_mbs,n_ats,n_gos,control,go,m_force,m_torque,a_force,g_force)
           ! cpu time checkpoint
           CALL checkpoint(time_force,timeA,timeB)
 
        ELSE IF(control%md_thermo == cooler_index )THEN ! cooler "thermostat" - only friction is applied resulting in decreasing temperature
 
           ! update vel by dt/2 (from t+dt/2 to t+dt) with new forces (t+dt) including "future friction"
-          CALL update_velocities(mbs,ats,n_mbs,n_ats,&
-               m_force,m_torque,a_force,params,control,0.5d0,is_constr,.true.)
+          CALL update_velocities(mbs,ats,gos,n_mbs,n_ats,n_gos,&
+               m_force,m_torque,a_force,g_force,params,control,go,0.5d0,is_constr,.true.)
           ! cpu time checkpoint
           CALL checkpoint(time_move,timeA,timeB)
 
           ! add friction to the force (t+dt)
-          CALL add_friction_force(mbs,ats,n_mbs,n_ats,control,m_force,m_torque,a_force)
+          CALL add_friction_force(mbs,ats,gos,n_mbs,n_ats,n_gos,control,go,m_force,m_torque,a_force,g_force)
           ! cpu time checkpoint
           CALL checkpoint(time_force,timeA,timeB)
 
        ELSE ! no thermostat
 
           ! update vel by dt/2 (from t+dt/2 to t+dt) with new forces (t+dt)
-          CALL update_velocities(mbs,ats,n_mbs,n_ats,&
-               m_force,m_torque,a_force,params,control,0.5d0,is_constr)
+          CALL update_velocities(mbs,ats,gos,n_mbs,n_ats,n_gos,&
+               m_force,m_torque,a_force,g_force,params,control,go,0.5d0,is_constr)
           ! cpu time checkpoint
           CALL checkpoint(time_move,timeA,timeB)
 
@@ -1035,8 +1082,8 @@ CONTAINS
     ELSE IF(control%md_algo == leapfrog_index)THEN ! leapfrog algorithm: this is here for testing, e.g. termostats have not been implemented
 
        ! move by dt (from t to t+dt) according to velocities at t+dt/2
-       CALL move_particles(mbs,ats,n_mbs,n_ats,cell,pbc,&
-            m_force,m_torque,a_force,params,control,is_constr,shift)
+       CALL move_particles(mbs,ats,gos,n_mbs,n_ats,n_gos,cell,pbc,&
+            m_force,m_torque,a_force,g_force,params,control,go,is_constr,shift)
        ! keep account on how much particles move for neighbor list updating
        drift = drift+shift
 
@@ -1052,10 +1099,10 @@ CONTAINS
 
        IF(drift > drift_range)THEN ! update neighbor lists if the particles have moved enough
           drift = 0.d0
-          CALL update_neighbors(mbs,ats,cell,pbc,bonds,&
-               boxed,boxes,box_mbs,box_ats,box_mc,box_ac,&
-               mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,&
-               params)
+          CALL update_neighbors(mbs,ats,gos,cell,pbc,bonds,&
+               boxed,boxes,box_mbs,box_ats,box_gos,box_mc,box_ac,box_gc,&
+               mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,mg_nbors,mg_n_ns,&
+               params,go)
        ELSE
           CALL update_bond_numbers(mbs,cell,pbc,mm_nbors,mm_n_ns,bonds,params%R_b,params%D_b,params%inv_Db)
        END IF
@@ -1064,16 +1111,17 @@ CONTAINS
        CALL checkpoint(time_nbor,timeA,timeB)      
        
        ! calculate new forces (t+dt)
-       CALL calc_forces(mbs,ats,mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,&
-            bonds,cell,pbc,btype,bval,control,params,is_constr,.true.,&
-            m_force,m_torque,a_force,virial,n_bond)
+       CALL calc_forces(mbs,ats,gos,&
+            mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,mg_nbors,mg_n_ns,&
+            bonds,cell,pbc,btype,bval,control,params,go,is_constr,.true.,&
+            m_force,m_torque,a_force,g_force,virial,n_bond)
 
        ! cpu time checkpoint
        CALL checkpoint(time_force,timeA,timeB)
        
        ! update vel by dt (from t+dt/2 to t+dt+dt/2) with new forces (t+dt)
-       CALL update_velocities(mbs,ats,n_mbs,n_ats,&
-            m_force,m_torque,a_force,params,control,1.0d0,is_constr)
+       CALL update_velocities(mbs,ats,gos,n_mbs,n_ats,n_gos,&
+            m_force,m_torque,a_force,g_force,params,control,go,1.0d0,is_constr)
 
        ! cpu time checkpoint
        CALL checkpoint(time_move,timeA,timeB)
@@ -1103,17 +1151,19 @@ CONTAINS
   ! *control control parameters (including the timestep)
   ! *timestep_fraction 1.0 for a full timestep, 0.5 for a half step (other values work similarly, but should not be needed)
   ! *future friction if given and true, the velocities are updated assuming forces from a future time including v-dependent friction: v(t+dt) = v(t) + a(t+dt)*dt = v(t) + a'(t+dt)*dt - g*v(t+dt)*dt -> v(t+dt) = (v(t) + a'(t+dt)*dt)/(1-g*dt)
-  SUBROUTINE update_velocities(mbs,ats,n_mbs,n_ats,&
-       m_force,m_torque,a_force,params,control,timestep_fraction,is_constr,future_friction)
+  SUBROUTINE update_velocities(mbs,ats,gos,n_mbs,n_ats,n_gos,&
+       m_force,m_torque,a_force,g_force,params,control,go,timestep_fraction,is_constr,future_friction)
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     TYPE(mbps), INTENT(IN) :: params
     TYPE(cps), INTENT(IN) :: control
-    REAL(KIND=dp), POINTER :: m_force(:,:), m_torque(:,:), a_force(:,:)
+    TYPE(gops), INTENT(IN) :: go
+    REAL(KIND=dp), POINTER :: m_force(:,:), m_torque(:,:), a_force(:,:), g_force(:,:)
     REAL(KIND=dp), INTENT(IN) :: timestep_fraction
     LOGICAL, INTENT(IN) :: is_constr
-    INTEGER, INTENT(IN) :: n_mbs, n_ats
+    INTEGER, INTENT(IN) :: n_mbs, n_ats, n_gos
     INTEGER :: ii, jj
     REAL(KIND=dp) :: dt, friction_corr!, friction_corr2
     LOGICAL, INTENT(IN), OPTIONAL :: future_friction
@@ -1196,6 +1246,38 @@ CONTAINS
           END IF
 
        END DO
+
+
+
+       DO ii = 1, n_gos ! loop gos
+          DO jj = 1, 3 ! loop x, y, z
+
+             ! select constraint
+             SELECT CASE (gos(ii)%constrained(jj)) 
+             CASE(frozen_pos_index) ! frozen position -> v = 0
+                gos(ii)%vel(jj) = 0.d0
+
+             CASE(frozen_vel_index) ! frozen velocity -> v = const.
+                ! don't change the velocity component
+                !ats(ii)%vel(jj) = ats(ii)%vel(jj)
+
+             CASE(all_frozen_index) ! frozen all -> v = 0
+                gos(ii)%vel(jj) = 0.d0
+
+             CASE DEFAULT ! none
+                gos(ii)%vel(jj) = gos(ii)%vel(jj) + dt*g_force(jj,ii)/gos(ii)%mass
+             END SELECT
+          END DO
+
+          ! apply the scaling coefficient for "future friction"
+          IF(include_friction)THEN
+             gos(ii)%vel = friction_corr*gos(ii)%vel
+          END IF
+
+       END DO
+
+
+
     ELSE ! unconstrained system
        DO ii = 1, n_mbs ! loop molecules
 
@@ -1221,6 +1303,17 @@ CONTAINS
           END IF
 
        END DO
+       DO ii = 1, n_gos ! loop atoms
+
+          ! update velocity: v += F/m*dt
+          gos(ii)%vel = gos(ii)%vel + dt*g_force(1:3,ii)/gos(ii)%mass
+
+          ! update velocity: v += F/m*dt
+          IF(include_friction)THEN
+             gos(ii)%vel = friction_corr*gos(ii)%vel
+          END IF
+
+       END DO
     END IF
 
     RETURN
@@ -1243,17 +1336,19 @@ CONTAINS
   ! *params physical parameters
   ! *control control parameters (including the timestep)
   ! *max_shift the maximum change in a position coordinate. needed for optimal updating frequency of neighbors lists 
-  SUBROUTINE move_particles(mbs,ats,n_mbs,n_ats,cell,pbc,&
-       m_force,m_torque,a_force,params,control,is_constr,max_shift)
+  SUBROUTINE move_particles(mbs,ats,gos,n_mbs,n_ats,n_gos,cell,pbc,&
+       m_force,m_torque,a_force,g_force,params,control,go,is_constr,max_shift)
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     TYPE(mbps), INTENT(IN) :: params
     TYPE(cps), INTENT(IN) :: control
-    REAL(KIND=dp), POINTER :: m_force(:,:), m_torque(:,:), a_force(:,:)
+    TYPE(gops), INTENT(IN) :: go
+    REAL(KIND=dp), POINTER :: m_force(:,:), m_torque(:,:), a_force(:,:), g_force(:,:)
     REAL(KIND=dp), INTENT(OUT) :: max_shift
     REAL(KIND=dp), INTENT(IN) :: cell(3)
-    INTEGER, INTENT(IN) :: n_mbs, n_ats
+    INTEGER, INTENT(IN) :: n_mbs, n_ats, n_gos
     LOGICAL, INTENT(IN) :: is_constr, pbc(3)
     INTEGER :: ii, jj
     REAL(KIND=dp) :: dtdt, spin(3), shift(3)
@@ -1410,7 +1505,76 @@ CONTAINS
        END DO
 
 
+
+       DO ii = 1, n_gos ! loop gos
+          IF(control%md_algo == velocity_verlet_index)THEN ! velocity verlet algorithm
+             DO jj = 1, 3 ! loop x, y, z
+
+                SELECT CASE (gos(ii)%constrained(jj)) ! select constraint
+                CASE(frozen_pos_index) ! frozen position
+                   shift(jj) = 0.d0
+                CASE(frozen_vel_index) ! frozen velocity
+                   shift(jj) = control%time_step*gos(ii)%vel(jj) ! no acceleration term
+                CASE(all_frozen_index) ! all frozen
+                   shift(jj) = 0.d0
+                CASE DEFAULT ! none
+                   shift(jj) = control%time_step*gos(ii)%vel(jj) + &
+                        dtdt*g_force(jj,ii)/gos(ii)%mass
+                END SELECT
+             END DO
+
+             ! shift the position
+             gos(ii)%pos = gos(ii)%pos + shift
+             ! account for periodicity
+             DO jj = 1, 3
+                IF(pbc(jj))THEN
+                   IF(gos(ii)%pos(jj) > cell(jj))THEN
+                      gos(ii)%pos(jj) = gos(ii)%pos(jj) - cell(jj)
+                      gos(ii)%inipos(jj) = gos(ii)%inipos(jj) - cell(jj)                      
+                   END IF
+                   IF(gos(ii)%pos(jj) < 0.d0)THEN
+                      gos(ii)%pos(jj) = gos(ii)%pos(jj) + cell(jj)
+                      gos(ii)%inipos(jj) = gos(ii)%inipos(jj) + cell(jj)
+                   END IF
+                END IF
+             END DO
+             IF(MAXVAL(shift(:)) > max_shift) max_shift = MAXVAL(shift(:))
+
+          ELSE IF(control%md_algo == leapfrog_index)THEN ! leapfrog algorithm
+             DO jj = 1, 3
+                SELECT CASE (gos(ii)%constrained(jj)) 
+                CASE(frozen_pos_index)
+                   shift(jj) = 0.d0
+                CASE(frozen_vel_index)
+                   shift(jj) = control%time_step*gos(ii)%vel(jj)
+                CASE(all_frozen_index)
+                   shift(jj) = 0.d0
+                CASE DEFAULT
+                   shift(jj) = control%time_step*gos(ii)%vel(jj)
+                END SELECT
+             END DO
+             shift = control%time_step*gos(ii)%vel
+             gos(ii)%pos = gos(ii)%pos + shift
+             ! periodicity
+             DO jj = 1, 3
+                IF(pbc(jj))THEN
+                   IF(gos(ii)%pos(jj) > cell(jj))THEN
+                      gos(ii)%pos(jj) = gos(ii)%pos(jj) - cell(jj)
+                      gos(ii)%inipos(jj) = gos(ii)%inipos(jj) - cell(jj)                      
+                   END IF
+                   IF(gos(ii)%pos(jj) < 0.d0)THEN
+                      gos(ii)%pos(jj) = gos(ii)%pos(jj) + cell(jj)
+                      gos(ii)%inipos(jj) = gos(ii)%inipos(jj) + cell(jj)
+                   END IF
+                END IF
+             END DO
+             IF(MAXVAL(shift(:)) > max_shift) max_shift = MAXVAL(shift(:))
+          END IF
+       END DO
+
+
     ELSE ! no constraints
+
 
        DO ii = 1, n_mbs ! loop molecules
           IF(control%md_algo == velocity_verlet_index)THEN ! velocity verlet algorithm
@@ -1480,6 +1644,45 @@ CONTAINS
              IF(MAXVAL(shift(:)) > max_shift) max_shift = MAXVAL(shift(:))
           END IF
        END DO
+
+
+       
+       DO ii = 1, n_gos ! loop gos
+          IF(control%md_algo == velocity_verlet_index)THEN ! velocity verlet algorithm
+
+             ! shift: r+ = v*dt + a*dt**2/2
+             shift = control%time_step*gos(ii)%vel + dtdt*g_force(1:3,ii)/gos(ii)%mass
+
+!!$             write(*,*) ii, gos(ii)%vel
+!!$             write(*,*) ii, g_force(1:3,ii)
+!!$             write(*,*) ii, shift
+
+             gos(ii)%pos = gos(ii)%pos + shift
+             ! periodicity
+             DO jj = 1, 3 ! loop x, y, z
+                IF(pbc(jj))THEN ! periodic boundary
+                   IF(gos(ii)%pos(jj) > cell(jj)) gos(ii)%pos(jj) = gos(ii)%pos(jj) - cell(jj)
+                   IF(gos(ii)%pos(jj) < 0.d0)     gos(ii)%pos(jj) = gos(ii)%pos(jj) + cell(jj)
+                END IF
+             END DO
+             ! record the max shift in a single coordinate
+             IF(MAXVAL(shift(:)) > max_shift) max_shift = MAXVAL(shift(:))
+
+          ELSE IF(control%md_algo == leapfrog_index)THEN ! leapfrog
+             shift = control%time_step*gos(ii)%vel
+             gos(ii)%pos = gos(ii)%pos + shift
+             ! periodicity
+             DO jj = 1, 3
+                IF(pbc(jj))THEN
+                   IF(gos(ii)%pos(jj) > cell(jj)) gos(ii)%pos(jj) = gos(ii)%pos(jj) - cell(jj)
+                   IF(gos(ii)%pos(jj) < 0.d0)     gos(ii)%pos(jj) = gos(ii)%pos(jj) + cell(jj)
+                END IF
+             END DO
+             IF(MAXVAL(shift(:)) > max_shift) max_shift = MAXVAL(shift(:))
+          END IF
+       END DO
+
+
     END IF
 
     RETURN
@@ -1532,9 +1735,11 @@ CONTAINS
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:), m_dummy(:)
     TYPE(atom), POINTER :: ats(:), a_dummy(:)
+    TYPE(gop), POINTER :: gos(:), g_dummy(:)    
     TYPE(mbps), INTENT(IN) :: params
     TYPE(cps), INTENT(IN) :: control
-    REAL(KIND=dp), POINTER :: m_force(:,:), m_torque(:,:), a_force(:,:), &
+    TYPE(gops) :: go
+    REAL(KIND=dp), POINTER :: m_force(:,:), m_torque(:,:), a_force(:,:), g_force(:,:), &
          om_force(:,:), om_torque(:,:), oa_force(:,:), &
          mc_force(:,:), mc_torque(:,:), ac_force(:,:)
     REAL(KIND=dp), INTENT(IN) :: cell(3), bval(3)
@@ -1547,6 +1752,7 @@ CONTAINS
     REAL(KIND=dp), POINTER :: bonds(:),n_bond(:)
     INTEGER, POINTER :: mm_nbors(:,:), mm_n_ns(:), &
          ma_nbors(:,:), ma_n_ns(:), aa_nbors(:,:), aa_n_ns(:), &
+         mg_nbors(:,:), mg_n_ns(:), &
          box_mbs(:,:,:,:,:), box_ats(:,:,:,:,:), &
          box_mc(:,:,:,:), box_ac(:,:,:,:)
     INTEGER, INTENT(IN) :: boxes(3,2)
@@ -1656,9 +1862,10 @@ CONTAINS
     oa_force = a_force
 
     ! calculate new forces/gradients
-    CALL calc_forces(mbs,ats,mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,&
-            bonds,cell,pbc,btype,bval,control,params,is_constr,.false.,&
-            m_force,m_torque,a_force,virial,n_bond)
+    CALL calc_forces(mbs,ats,gos,&
+         mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,mg_nbors,mg_n_ns,&
+         bonds,cell,pbc,btype,bval,control,params,go,is_constr,.false.,&
+         m_force,m_torque,a_force,g_force,virial,n_bond)
 
     ! "mixing parameter"
     dot1 = 0.d0
@@ -1745,8 +1952,10 @@ CONTAINS
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:), m_dummy(:)
     TYPE(atom), POINTER :: ats(:), a_dummy(:)
-    TYPE(mbps), INTENT(IN) :: params
-    REAL(KIND=dp), POINTER :: m_force(:,:), m_torque(:,:), a_force(:,:)
+    TYPE(gop), POINTER :: gos(:), g_dummy(:)
+    TYPE(mbps), INTENT(IN) :: params    
+    TYPE(gops) :: go
+    REAL(KIND=dp), POINTER :: m_force(:,:), m_torque(:,:), a_force(:,:), g_force(:,:)
     REAL(KIND=dp), INTENT(IN) :: cell(3), bval(3), ini_step
     INTEGER, INTENT(IN) :: btype(3)
     !LOGICAL, POINTER :: pdone(:,:), apdone(:,:)
@@ -1755,8 +1964,9 @@ CONTAINS
     REAL(KIND=dp), POINTER :: bonds(:)
     INTEGER, POINTER :: mm_nbors(:,:), mm_n_ns(:), &
          ma_nbors(:,:), ma_n_ns(:), aa_nbors(:,:), aa_n_ns(:), &
-         box_mbs(:,:,:,:,:), box_ats(:,:,:,:,:), &
-         box_mc(:,:,:,:), box_ac(:,:,:,:)
+         mg_nbors(:,:), mg_n_ns(:), &
+         box_mbs(:,:,:,:,:), box_ats(:,:,:,:,:), box_gos(:,:,:,:,:), &
+         box_mc(:,:,:,:), box_ac(:,:,:,:), box_gc(:,:,:,:)
     INTEGER, INTENT(IN) :: boxes(3,2)
     LOGICAL, INTENT(IN) :: boxed
     INTEGER :: ii, jj, i_scale, kk, steps
@@ -1865,10 +2075,10 @@ CONTAINS
        tot_shift = tot_shift + dt
        IF(tot_drift > 0.5d0*params%cut_ver)THEN
           tot_drift = 0.d0
-          CALL update_neighbors(m_dummy,a_dummy,cell,pbc,bonds,&
-               boxed,boxes,box_mbs,box_ats,box_mc,box_ac,&
-               mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,&
-               params)
+          CALL update_neighbors(m_dummy,a_dummy,g_dummy,cell,pbc,bonds,&
+               boxed,boxes,box_mbs,box_ats,box_gos,box_mc,box_ac,box_gc,&
+               mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,mg_nbors,mg_n_ns,&
+               params,go)
        ELSE
           CALL update_bond_numbers(m_dummy,cell,pbc,mm_nbors,mm_n_ns,bonds,params%R_b,params%D_b,params%inv_Db)
        END IF
@@ -1892,9 +2102,10 @@ CONTAINS
 
        ELSE
 
-          CALL pot_energy(m_dummy,a_dummy,mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,&
-               bonds,cell,pbc,btype,bval,params,is_constr,&
-               energy,ene1,ene2,ene3,ene4,ene5)
+!!$          CALL pot_energy(m_dummy,a_dummy,g_dummy,&
+!!$               mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,mg_nbors,mg_n_ns,&
+!!$               bonds,cell,pbc,btype,bval,params,is_constr,&
+!!$               energy,ene1,ene2,ene3,ene4,ene5,ene6,ene7,ene8,ene9,ene10,ene11,ene12)
 
        END IF
 
@@ -1926,10 +2137,10 @@ CONTAINS
                 a_dummy(jj) = ats(jj)
              END DO
              ! update neighbors according to the real particles
-             CALL update_neighbors(mbs,ats,cell,pbc,bonds,&
-                  boxed,boxes,box_mbs,box_ats,box_mc,box_ac,&
-                  mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,&
-                  params)
+             CALL update_neighbors(mbs,ats,gos,cell,pbc,bonds,&
+                  boxed,boxes,box_mbs,box_ats,box_gos,box_mc,box_ac,box_gc,&
+                  mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,mg_nbors,mg_n_ns,&
+                  params,go)
           ELSE
              dt = -0.5d0*dt
              i_scale = i_scale + 1
@@ -1998,7 +2209,7 @@ CONTAINS
     ! Berendsen barostat
     IF(control_params%md_baro == berendsen_index)THEN
        ! calculate average pressure over baro_interval steps
-       CALL kin_energy(molecules,atoms,n_freedom,e_kin,temps,e_lin,e_rot)
+       CALL kin_energy(molecules,atoms,gos,n_freedom,e_kin,temps,e_lin,e_rot)
        press = press + (0.66666666667d0*e_lin + virial)/(supercell(1)*supercell(2)*supercell(3)) / &
             barosteps
        
@@ -2026,10 +2237,11 @@ CONTAINS
           drift = drift + ABS(1.d0-scaleratio)*MAXVAL(supercell)
           IF(drift > drift_range)THEN ! update neighbor lists if the particles have moved enough
              drift = 0.d0
-             CALL update_neighbors(molecules,atoms,supercell,periodic_boundary,mb_bonds,&
-                  boxed,boxes,box_mbs,box_ats,box_mb_count,box_at_count,&
-                  mbmb_neighbors,mbmb_n_nbors,mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
-                  physical_params)
+             CALL update_neighbors(molecules,atoms,gos,supercell,periodic_boundary,mb_bonds,&
+                  boxed,boxes,box_mbs,box_ats,box_gos,box_mb_count,box_at_count,box_go_count,&
+                  mbmb_neighbors,mbmb_n_nbors,mbat_neighbors,mbat_n_nbors,&
+                  atat_neighbors,atat_n_nbors,mbgo_neighbors,mbgo_n_nbors,&
+                  physical_params,go_params)
           ELSE
              ! bonds must be updated always
              CALL update_bond_numbers(molecules,supercell,periodic_boundary,&
@@ -2040,11 +2252,13 @@ CONTAINS
           CALL checkpoint(time_move,timeA,timeB)
           
           ! calculate forces according to the new configuration
-          CALL calc_forces(molecules,atoms,&
-               mbmb_neighbors,mbmb_n_nbors,mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
-               mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,control_params,physical_params,&
+          CALL calc_forces(molecules,atoms,gos,&
+               mbmb_neighbors,mbmb_n_nbors,mbat_neighbors,mbat_n_nbors,&
+               atat_neighbors,atat_n_nbors,mbgo_neighbors,mbgo_n_nbors,&
+               mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,&
+               control_params,physical_params,go_params,&
                is_constrained,.false.,&
-               mb_forces,mb_torques,atom_forces,virial,n_bond)
+               mb_forces,mb_torques,atom_forces,go_forces,virial,n_bond)
           
           CALL checkpoint(time_force,timeA,timeB)
           
@@ -2118,7 +2332,7 @@ CONTAINS
         IF(simulation_time > xyztimer .OR. finish)THEN
            xyztimer = xyztimer+control_params%xyz_interval
            CALL write_xyz(system_name(1:namelength-1)//".xyz",&
-                molecules,atoms,physical_params%l_oh,.false.)        
+                molecules,atoms,gos,physical_params%l_oh,.false.)        
         END IF
      END IF
 
@@ -2138,8 +2352,8 @@ CONTAINS
            timelabel = real_to_string(simulation_time)
            CALL write_contfile(system_name(1:namelength-1)//CONT_MID//&
                 timelabel(11-MIN(10,MAX(3,1+INT(log(control_params%time_max)/log(10.d0)+0.01))):10 )//"."//MB_IN,&
-                molecules,atoms,n_elements,&
-                physical_params,control_params,&
+                molecules,atoms,gos,n_elements,&
+                physical_params,control_params,go_params,&
                 supercell,boundary_type,boundary_value,is_constrained)
         END IF
      END IF
@@ -2159,12 +2373,14 @@ CONTAINS
         CALL time_difference(tvector,newt,timediff)
         
         ! Calculate energy
-        CALL kin_energy(molecules,atoms,n_freedom,e_kin,temps,e_lin,e_rot)
-        CALL pot_energy(molecules,atoms,mbmb_neighbors,mbmb_n_nbors,&
+        CALL kin_energy(molecules,atoms,gos,n_freedom,e_kin,temps,e_lin,e_rot)
+        CALL pot_energy(molecules,atoms,gos,mbmb_neighbors,mbmb_n_nbors,&
              mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
+             mbgo_neighbors,mbgo_n_nbors, &
              mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,&
-             physical_params,is_constrained,&
-             e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr)        
+             physical_params,go_params,is_constrained,&
+             e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr,&
+             e_mbgo, e_go, e_stretch, e_bend, e_torsion, e_native, e_nonnat)       
 
         CALL checkpoint(time_stat,timeA,timeB)
 
@@ -2197,6 +2413,15 @@ CONTAINS
               IF(n_ats > 0)THEN
                  WRITE(*,'(A,F20.4)') "     MB-atom potential:     ", e_mbat
                  WRITE(*,'(A,F20.4)') "     atom-atom potential:   ", e_atat
+              END IF
+              IF(n_gos > 0)THEN
+                 WRITE(*,'(A,F20.4)') "     MB-GO potential:       ", e_mbgo
+                 WRITE(*,'(A,F20.4)') "     GO-GO potential:       ", e_go
+                 WRITE(*,'(A,F20.4)') "        GO stretching:      ", e_stretch
+                 WRITE(*,'(A,F20.4)') "        GO bending:         ", e_bend
+                 WRITE(*,'(A,F20.4)') "        GO torsion:         ", e_torsion
+                 WRITE(*,'(A,F20.4)') "        GO native:          ", e_native
+                 WRITE(*,'(A,F20.4)') "        GO non-native:      ", e_nonnat
               END IF
               IF(is_constrained)THEN
                  WRITE(*,'(A,F20.4)') "     constraint potential:  ", e_constr
@@ -2255,12 +2480,14 @@ CONTAINS
               CALL time_difference(tvector,newt,timediff)
               
               ! Calculate energy
-              CALL kin_energy(molecules,atoms,n_freedom,e_kin,temps,e_lin,e_rot)
-              CALL pot_energy(molecules,atoms,mbmb_neighbors,mbmb_n_nbors,&
+              CALL kin_energy(molecules,atoms,gos,n_freedom,e_kin,temps,e_lin,e_rot)
+              CALL pot_energy(molecules,atoms,gos,mbmb_neighbors,mbmb_n_nbors,&
                    mbat_neighbors,mbat_n_nbors,atat_neighbors,atat_n_nbors,&
+                   mbgo_neighbors,mbgo_n_nbors, &
                    mb_bonds,supercell,periodic_boundary,boundary_type,boundary_value,&
-                   physical_params,is_constrained,&
-                   e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr)        
+                   physical_params,go_params,is_constrained,&
+                   e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr,&
+                   e_mbgo, e_go, e_stretch, e_bend, e_torsion, e_native, e_nonnat)       
               updated_stats = .true.      
               
               CALL checkpoint(time_stat,timeA,timeB)

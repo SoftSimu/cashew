@@ -88,7 +88,7 @@ MODULE mb_model
   ! determining the vector from one particle to another
   ! (taking possible periodic boundaries into account).
   INTERFACE vector
-     MODULE PROCEDURE vector_mm, vector_ma, vector_aa, vector_mg
+     MODULE PROCEDURE vector_mm, vector_ma, vector_aa, vector_mg, vector_gg
   END INTERFACE
 
   ! interface overloading the function "displacement"
@@ -496,6 +496,52 @@ CONTAINS
   END FUNCTION vector_mg
 
 
+  ! Returns the vector from a go to a go, taking into account
+  ! the periodic boundaries.
+  ! *go1 (start) go
+  ! *go2 (end) go
+  ! *cell supercell dimensions
+  ! *pbc true if periodic boundaries
+  ! *vec vector from mb1 to at2
+  FUNCTION vector_gg(go1,go2,cell,pbc) &
+       RESULT(vec)
+    IMPLICIT NONE
+    TYPE(gop), INTENT(IN) :: go1
+    TYPE(gop), INTENT(IN) :: go2
+    REAL(KIND=dp) :: vec(3)
+    REAL(KIND=dp), INTENT(IN) :: cell(3)
+    LOGICAL, INTENT(IN) :: pbc(3)
+
+    vec(1) = go2%pos(1) - go1%pos(1)
+    vec(2) = go2%pos(2) - go1%pos(2)
+    vec(3) = go2%pos(3) - go1%pos(3)
+    IF(pbc(1))THEN
+       IF(2.d0*vec(1) > cell(1))THEN
+          vec(1) = vec(1)-cell(1)
+       ELSE IF(2.d0*vec(1) <= -cell(1))THEN
+          vec(1) = vec(1)+cell(1)
+       END IF
+    END IF
+    IF(pbc(2))THEN
+       IF(2.d0*vec(2) > cell(2))THEN
+          vec(2) = vec(2)-cell(2)
+       ELSE IF(2.d0*vec(2) <= -cell(2))THEN
+          vec(2) = vec(2)+cell(2)
+       END IF
+    END IF
+    IF(pbc(3))THEN
+       IF(2.d0*vec(3) > cell(3))THEN
+          vec(3) = vec(3)-cell(3)
+       ELSE IF(2.d0*vec(3) <= -cell(3))THEN
+          vec(3) = vec(3)+cell(3)
+       END IF
+    END IF
+
+  END FUNCTION vector_gg
+
+
+
+
   ! Returns the vector from one atom to another, taking into account
   ! the periodic boundaries.
   ! *at1 first (start) atom
@@ -617,6 +663,7 @@ CONTAINS
 
     n_mb = SIZE(mbs(:))
     n_at = SIZE(ats(:))
+    n_go = SIZE(gos(:))
 
     ! allocate arrays
     nborsize = 200
@@ -1214,40 +1261,53 @@ CONTAINS
   ! *ma_n_nbor MB-atom numbers of neighbors
   ! *aa_n_nbor atom-atom numbers of neighbors
   ! *params physical parameters
-  SUBROUTINE update_neighbors(mbs,ats,cell,pbc,bonds,boxed,boxes,box_mbs,box_ats,box_mc,box_ac,&
-       mm_nbors,mm_n_nbor,ma_nbors,ma_n_nbor,aa_nbors,aa_n_nbor,params)
+  SUBROUTINE update_neighbors(mbs,ats,gos,cell,pbc,bonds,boxed,boxes,&
+       box_mbs,box_ats,box_gos,box_mc,box_ac,box_gc,&
+       mm_nbors,mm_n_nbor,ma_nbors,ma_n_nbor,aa_nbors,aa_n_nbor,mg_nbors,mg_n_nbor,&
+       params,go)
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     TYPE(mbps), INTENT(IN) :: params
+    TYPE(gops), INTENT(IN) :: go
     REAL(KIND=dp), POINTER :: bonds(:)
     INTEGER, POINTER :: mm_nbors(:,:), mm_n_nbor(:), &
-         ma_nbors(:,:), ma_n_nbor(:), aa_nbors(:,:), aa_n_nbor(:), &
-         box_mbs(:,:,:,:,:), box_ats(:,:,:,:,:), &
-         box_mc(:,:,:,:), box_ac(:,:,:,:)
+         ma_nbors(:,:), ma_n_nbor(:), &
+         aa_nbors(:,:), aa_n_nbor(:), &
+         mg_nbors(:,:), mg_n_nbor(:), &
+         box_mbs(:,:,:,:,:), box_ats(:,:,:,:,:), box_gos(:,:,:,:,:), &
+         box_mc(:,:,:,:), box_ac(:,:,:,:), box_gc(:,:,:,:)
     REAL(KIND=dp), INTENT(IN) :: cell(3)
     INTEGER, INTENT(IN) :: boxes(3,2)
     LOGICAL, INTENT(IN) :: pbc(3), boxed
-    INTEGER :: ii, jj, nj, n_mb, n_at, mm_size, ma_size, aa_size, box_size, xb, yb, zb, ix, iy, iz, bc(3), &
-         mpi_mm_size, mpi_ma_size, mpi_aa_size
+    INTEGER :: ii, jj, nj, n_mb, n_at, n_go, &
+         mm_size, ma_size, aa_size, mg_size, box_size, &
+         xb, yb, zb, ix, iy, iz, bc(3), &
+         mpi_mm_size, mpi_ma_size, mpi_aa_size, mpi_mg_size
     REAL(KIND=dp) :: distance, vect(3), this_cut, xl(2), yl(2), zl(2)
     LOGICAL :: skip
 
     n_mb = SIZE(mbs(:))
     n_at = SIZE(ats(:))
+    n_go = SIZE(gos(:))
     mm_size = SIZE(mm_nbors(:,1))
     ma_size = SIZE(ma_nbors(:,1))
     aa_size = SIZE(aa_nbors(:,1))
+    mg_size = SIZE(mg_nbors(:,1))
     mm_nbors = 0
     mm_n_nbor = 0
     ma_nbors = 0
     ma_n_nbor = 0
     aa_nbors = 0
     aa_n_nbor = 0   
+    mg_nbors = 0
+    mg_n_nbor = 0
 
     mpi_mm_size = mm_size
     mpi_ma_size = ma_size
     mpi_aa_size = aa_size
+    mpi_mg_size = mg_size
     mpi_m_n_nbor = 0
     mpi_a_n_nbor = 0
 
@@ -1305,6 +1365,26 @@ CONTAINS
                 CALL expand_boxlist(box_ats,box_size,1)
              END IF
              box_ats(box_ac(xb,yb,zb,2),xb,yb,zb,2) = ii
+          END DO
+       END IF
+       IF(n_at > 0)THEN ! gos
+          box_gos = 0
+          box_gc = 0
+          box_size = SIZE(box_gos(:,1,1,1,1))
+          DO ii = 1, n_at
+             CALL box_coordinates(gos(ii)%pos,xl(1),yl(1),zl(1),xb,yb,zb,pbc,boxes(:,1))
+             box_gc(xb,yb,zb,1) = box_gc(xb,yb,zb,1) + 1
+             IF(box_gc(xb,yb,zb,1) >= box_size-2)THEN
+                CALL expand_boxlist(box_gos,box_size,1)
+             END IF
+             box_gos(box_gc(xb,yb,zb,1),xb,yb,zb,1) = ii
+
+             CALL box_coordinates(gos(ii)%pos,xl(2),yl(2),zl(2),xb,yb,zb,pbc,boxes(:,2))
+             box_gc(xb,yb,zb,2) = box_gc(xb,yb,zb,2) + 1
+             IF(box_gc(xb,yb,zb,2) >= box_size-2)THEN
+                CALL expand_boxlist(box_gos,box_size,1)
+             END IF
+             box_gos(box_gc(xb,yb,zb,2),xb,yb,zb,2) = ii
           END DO
        END IF
 
@@ -1383,6 +1463,44 @@ CONTAINS
              END DO
           END DO
        END IF
+
+
+
+       ! mb-go list
+       IF(first_mpi_mb > 0 .AND. n_gs > 0)THEN
+          !this_cut = params%max_ma_cut
+          DO ii = first_mpi_mb, last_mpi_mb ! loop over the molecules dedicated for this processor
+             CALL box_coordinates(mbs(ii)%pos,xl(2),yl(2),zl(2),xb,yb,zb,pbc,boxes(:,2))
+             DO ix = -1,1 ! check only the neighboring boxes
+                DO iy = -1,1
+                   DO iz = -1,1
+                      CALL box_shift(xb,yb,zb,ix,iy,iz,boxes(:,2),pbc,bc,skip) ! get the shifted box coordinates
+                      IF(.not.skip)THEN ! the neighbor loop may find the same box several times at boundaries
+                                        ! but each cell must be inspected only once
+                         DO jj = 1, box_gc(bc(1),bc(2),bc(3),2) ! loop over the gos in the box
+                            ! accurate cutoff
+                            this_cut = params%cut_lj + params%cut_ver
+                            nj = box_gos(jj,bc(1),bc(2),bc(3),2)
+                            vect = vector(mbs(ii),gos(nj),cell,pbc)
+                            distance = .norm.vect
+                            IF(distance < this_cut)THEN ! if close enough, add to the neighbor list
+                               mg_n_nbor(ii) = mg_n_nbor(ii)+1
+                               IF(mg_n_nbor(ii) >= mpi_mg_size-2)THEN ! if the neighborlist is small, add more space to it
+                                  CALL expand_nborlist(mg_nbors,mpi_mg_size,1)
+                               END IF
+                               mg_nbors(mg_n_nbor(ii),ii) = nj
+                            END IF
+                            
+                         END DO
+                      END IF
+
+                   END DO
+                END DO
+             END DO
+          END DO
+       END IF
+
+
 
        ! mb-atom list
        IF(first_mpi_atom > 0)THEN
@@ -1463,7 +1581,25 @@ CONTAINS
                 END IF
              END DO
           END DO
+
+          DO ii = first_mpi_mb, last_mpi_mb
+             DO jj = 1, n_go
+                ! accurate cutoff
+                this_cut = params%cut_lj + params%cut_ver
+                vect = vector(mbs(ii),gos(jj),cell,pbc)
+                distance = .norm.vect
+                IF(distance < this_cut)THEN
+                   mg_n_nbor(ii) = mg_n_nbor(ii)+1
+                   IF(mg_n_nbor(ii) >= mpi_mg_size-2)THEN
+                      CALL expand_nborlist(mg_nbors,mpi_mg_size,1)
+                   END IF
+                   mg_nbors(mg_n_nbor(ii),ii) = jj
+                END IF
+             END DO
+          END DO
        END IF
+
+
 
        IF(first_mpi_atom > 0)THEN ! this cpu should work on atoms
           !this_cut = params%max_at_cut ! current cutoff
@@ -1521,6 +1657,18 @@ CONTAINS
        CALL mpi_stack(ma_nbors,ma_n_nbor,n_ms,ma_size)
        CALL MPI_BCAST(ma_nbors,n_ms*ma_size,MPI_INTEGER,master_cpu,MPI_COMM_WORLD,mpistat)
        CALL MPI_BCAST(ma_n_nbor,n_ms,MPI_INTEGER,master_cpu,MPI_COMM_WORLD,mpistat)
+    END IF
+
+    ! mb-go
+    IF(n_ms > 0 .AND. n_gs > 0)THEN
+       CALL MPI_ALLREDUCE(mg_n_nbor,mpi_m_n_nbor,n_ms,MPI_INTEGER,MPI_SUM,MPI_COMM_WORLD,mpistat)
+       mpi_mg_size = MAX(mpi_mg_size,5*MAXVAL(mpi_m_n_nbor(:))/4)
+       CALL MPI_ALLREDUCE(mpi_mg_size,mg_size,1,MPI_INTEGER,MPI_MAX,MPI_COMM_WORLD,mpistat)
+       CALL fix_nborlist(mg_nbors,mg_size)
+       
+       CALL mpi_stack(mg_nbors,mg_n_nbor,n_ms,mg_size)
+       CALL MPI_BCAST(mg_nbors,n_ms*mg_size,MPI_INTEGER,master_cpu,MPI_COMM_WORLD,mpistat)
+       CALL MPI_BCAST(mg_n_nbor,n_ms,MPI_INTEGER,master_cpu,MPI_COMM_WORLD,mpistat)
     END IF
     
     ! atom-atom
@@ -1640,18 +1788,20 @@ CONTAINS
   ! *n_free number of degrees of freedom
   ! *ene_lin the linear part of kinetic energy
   ! *ene_rot the rotational part of kinetic energy
-  SUBROUTINE kin_energy(mbs,ats,n_free,ene,temper,ene_lin,ene_rot)       
+  SUBROUTINE kin_energy(mbs,ats,gos,n_free,ene,temper,ene_lin,ene_rot)       
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     REAL(KIND=dp), INTENT(OUT) :: ene, temper, ene_rot, ene_lin
     REAL(KIND=dp) :: mpi_ene, mpi_ene_rot, mpi_ene_lin
     REAL(KIND=dp) :: v(3), w(3)
     INTEGER, INTENT(IN) :: n_free
-    INTEGER :: n_mbs, n_ats, ii
+    INTEGER :: n_mbs, n_ats, n_gos, ii
     
     n_mbs = mbs_size(mbs)
     n_ats = ats_size(ats)
+    n_gos = gos_size(gos)
     ene = 0.d0
     ene_lin = 0.d0
     ene_rot = 0.d0
@@ -1676,6 +1826,13 @@ CONTAINS
           mpi_ene_lin = mpi_ene_lin + ats(ii)%mass*(v.o.v)
        END DO
     END IF
+    IF(first_mpi_go_split > 0)THEN
+       DO ii = first_mpi_go_split, last_mpi_go_split ! gos
+          v = gos(ii)%vel
+          mpi_ene_lin = mpi_ene_lin + gos(ii)%mass*(v.o.v)
+       END DO
+    END IF
+
     mpi_ene_lin = 0.5d0*mpi_ene_lin
     mpi_ene_rot = 0.5d0*mpi_ene_rot
 
@@ -1727,25 +1884,35 @@ CONTAINS
   ! *ene_ma MB-atom potential contribution
   ! *ene_aa atom-atom potential contribution
   ! *ene_con constraint potential contribution
-  SUBROUTINE pot_energy(mbs,ats,mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,&
-       bonds,cell,pbc,btype,bval,params,is_constr,&
-       ene,ene_lj,ene_hb,ene_ma,ene_aa,ene_con)
+  SUBROUTINE pot_energy(mbs,ats,gos,&
+       mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,mg_nbors,mg_n_ns,&
+       bonds,cell,pbc,btype,bval,params,go,is_constr,&
+       ene,ene_lj,ene_hb,ene_ma,ene_aa,ene_con,&
+       ene_mbgo, ene_go, ene_stretch, ene_bend, ene_torsion, ene_native, ene_nonnat)
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     TYPE(mbps), INTENT(IN) :: params
+    TYPE(gops), INTENT(IN) :: go
     REAL(KIND=dp), INTENT(IN) :: cell(3), bval(3)
     INTEGER, INTENT(IN) :: btype(3)
     LOGICAL, INTENT(IN) :: pbc(3), is_constr
-    REAL(KIND=dp), INTENT(OUT) :: ene, ene_lj, ene_hb, ene_ma, ene_aa, ene_con
-    REAL(KIND=dp) :: mpi_ene, mpi_ene_lj, mpi_ene_hb, mpi_ene_ma, mpi_ene_aa, mpi_ene_con
+    REAL(KIND=dp), INTENT(OUT) :: ene, ene_lj, ene_hb, ene_ma, ene_aa, ene_con,&
+         ene_mbgo, ene_go, ene_stretch, ene_bend, ene_torsion, ene_native, ene_nonnat
+    REAL(KIND=dp) :: mpi_ene, mpi_ene_lj, mpi_ene_hb, mpi_ene_ma, mpi_ene_aa, mpi_ene_con,&
+         mpi_ene_mbgo, mpi_ene_go, mpi_ene_stretch, mpi_ene_bend, &
+         mpi_ene_torsion, mpi_ene_native, mpi_ene_nonnat
     REAL(KIND=dp) :: denom, phi, rij, inv_rij, hb_ij, hb_i, boi, boj, &
-         armsi(3,4), armsj(3,4), hij(3), &
-         vij(3), u_dot_r(2,4), gauss_rij, gauss_th(2,4), cos_phi(4,4), displ(3)
+         armsi(3,4), armsj(3,4), hij(3), ratio, &
+         vij(3), u_dot_r(2,4), gauss_rij, gauss_th(2,4), cos_phi(4,4), displ(3), &
+         vij2(3), rij2, inv_rij2, vij3(3), rij3, inv_rij3, dot, cosine, &
+         hij2(3), hij3(3), projection1(3), projection2(3)
     REAL(KIND=dp), POINTER :: bonds(:)
     INTEGER, POINTER :: mm_nbors(:,:), mm_n_ns(:), &
-         ma_nbors(:,:), ma_n_ns(:), aa_nbors(:,:), aa_n_ns(:)
-    INTEGER :: n_mb, n_at, ii, jj, nj, kk, ll, mm, nn, ns, type, type2
+         ma_nbors(:,:), ma_n_ns(:), aa_nbors(:,:), aa_n_ns(:), &
+         mg_nbors(:,:), mg_n_ns(:)
+    INTEGER :: n_mb, n_at, n_go, ii, jj, nj, kk, ll, mm, nn, ns, type, type2
     LOGICAL :: visited, got_displ
 
     ene = 0.d0
@@ -1753,13 +1920,29 @@ CONTAINS
     ene_hb = 0.d0
     ene_ma = 0.d0
     ene_aa = 0.d0
+    ene_mbgo = 0.d0
+    ene_go = 0.d0
+    ene_stretch = 0.d0
+    ene_bend = 0.d0
+    ene_torsion = 0.d0
+    ene_native = 0.d0
+    ene_nonnat = 0.d0
     mpi_ene = 0.d0
     mpi_ene_lj = 0.d0
     mpi_ene_hb = 0.d0
     mpi_ene_ma = 0.d0
     mpi_ene_aa = 0.d0
+    mpi_ene_mbgo = 0.d0
+    mpi_ene_go = 0.d0
+    mpi_ene_stretch = 0.d0
+    mpi_ene_bend = 0.d0
+    mpi_ene_torsion = 0.d0
+    mpi_ene_native = 0.d0
+    mpi_ene_nonnat = 0.d0
+
     n_mb = SIZE(mbs)
     n_at = SIZE(ats)
+    n_go = SIZE(gos)
 
     !!!!!!!!!!!!!!!!!!
     ! MB - MB energy !
@@ -1875,6 +2058,130 @@ CONTAINS
        mpi_ene = mpi_ene_lj + mpi_ene_hb
     END IF
 
+    IF(n_go > 0)THEN
+
+       !!!!!!!!!!!!!!!!!!
+       ! Mb - go energy !
+       !!!!!!!!!!!!!!!!!!
+
+       IF(first_mpi_mb > 0)THEN
+          DO ii = first_mpi_mb, last_mpi_mb ! mbs of this cpu
+             ns = mg_n_ns(ii) ! number of neighbors
+             DO jj = 1, ns ! neighbors of ii
+                nj = mg_nbors(jj,ii) ! jj:th neighbor
+                type = nj
+
+                ! no double counting
+                
+                ! vector and distance between ii ans nj
+                vij(1:3) = vector(mbs(ii),gos(nj),cell,pbc)
+                rij = sqrt(vij.o.vij)
+                !inv_rij = 1.d0/rij
+                !vij = vij*inv_rij
+                   
+                IF(rij < params%cut_lj)THEN ! cutoff
+
+                   ratio = go%sigma / rij
+                   ratio = ratio*ratio*ratio*ratio*ratio*ratio
+                   ! add the potential energy term for this pair
+                   mpi_ene_mbgo = mpi_ene_mbgo + &
+                        4.d0*go%epsilon_water(type)*( ratio*ratio - ratio )
+                      
+                END IF
+                                   
+             END DO
+
+          END DO
+       END IF
+              
+       !!!!!!!!!!!!!!!!!!
+       ! go - go energy !
+       !!!!!!!!!!!!!!!!!!
+
+       
+       IF(first_mpi_go_split > 0)THEN
+          DO ii = first_mpi_go_split, last_mpi_go_split ! loop over gos of this cpu
+          
+             IF(ii < go%length)THEN
+                ! vector and distance between ii and ii+1
+                vij(1:3) = vector(gos(ii),gos(ii+1),cell,pbc) ! vector from ii to ii+1
+                hij = vij
+                rij = sqrt(vij.o.vij) ! distance from ii to ii+1
+                inv_rij = 1.d0/rij    ! inverse distance from ii to ii+1
+                vij = vij*inv_rij     ! unit vector from ii to ii+1
+                
+                ! stretching energy
+                mpi_ene_stretch = mpi_ene_stretch + &
+                     go%kr * ( rij-go%r_chain(ii) )**2
+                
+                IF(ii < go%length-1)THEN
+                   ! vector and distance between ii+1 and ii+2
+                   vij2(1:3) = vector(gos(ii+1),gos(ii+2),cell,pbc) ! vector from ii+1 to ii+2
+                   hij2 = vij2
+                   rij2 = sqrt(vij2.o.vij2) ! distance from ii+1 to ii+2
+                   inv_rij2 = 1.d0/rij2    ! inverse distance from ii+1 to ii+2
+                   vij2 = vij2*inv_rij2     ! unit vector from ii+1 to ii+2
+
+                   ! bending energy
+                   cosine = -(vij .o. vij2)
+                   mpi_ene_bend = mpi_ene_bend + go%ktheta * (acos(cosine) - go%theta_chain(ii))**2
+                   
+                   IF(ii < go%length-2)THEN
+                      ! vector and distance between ii+2 and ii+3
+                      vij3(1:3) = vector(gos(ii+2),gos(ii+3),cell,pbc) ! vector from ii+2 to ii+3
+                      hij3 = vij3
+                      rij3 = sqrt(vij3.o.vij3) ! distance from ii+2 to ii+3
+                      inv_rij3 = 1.d0/rij3    ! inverse distance from ii+2 to ii+3
+                      vij3 = vij3*inv_rij3     ! unit vector from ii+2 to ii+3
+
+                      ! torsion energy                      
+                      projection1 = -(hij - (hij .o. hij2) * inv_rij2 * inv_rij2 * hij2)
+                      projection2 = (hij3 - (hij3 .o. hij2) * inv_rij2 * inv_rij2 * hij2)
+                      
+                      dot = projection1 .o. projection2 
+                      ratio = 1.d0 / ( (.norm.projection1) * (.norm.projection2) )
+                      
+                      ! cos phi = (p_21 . p_34) / ( |p_21| |p_34| ) = dot*ratio
+                      cosine = dot*ratio
+                      phi = acos(cosine)
+                      mpi_ene_torsion = mpi_ene_torsion + &
+                           go%kphi1 * cos( phi - go%phi_chain(ii) ) + &
+                           go%kphi2 * cos( 3.d0*( phi - go%phi_chain(ii) ))
+
+                   END IF
+
+                END IF
+
+             END IF
+
+             ! native and non-native bonds / repulsion
+             DO jj = ii+4, go%length
+                vij(1:3) = vector(gos(ii),gos(jj),cell,pbc) ! vector from ii+2 to ii+3
+                rij = sqrt(vij.o.vij) ! distance from ii+2 to ii+3
+                inv_rij = 1.d0/rij    ! inverse distance from ii+2 to ii+3
+                !vij = vij*inv_rij     ! unit vector from ii+2 to ii+3
+                IF(go%r_native(ii,jj) > 0.d0)THEN
+                   ratio = go%r_native(ii,jj) * inv_rij
+                   mpi_ene_native = mpi_ene_native + &
+                        go%epsilon * ( 5.d0 * ratio**12 - 6.d0 * ratio**10 )
+                ELSE
+                   ratio = go%r_rep * inv_rij
+                   ratio = ratio*ratio*ratio*ratio*ratio*ratio
+                   mpi_ene_nonnat = mpi_ene_nonnat + &
+                        go%epsilon * ( ratio*ratio )                   
+                END IF
+             END DO
+                
+          END DO
+
+       END IF
+
+       mpi_ene_go = mpi_ene_stretch + mpi_ene_bend + mpi_ene_torsion + &
+            mpi_ene_native + mpi_ene_nonnat
+
+       mpi_ene = mpi_ene + mpi_ene_go + mpi_ene_mbgo
+
+    END IF
 
     IF(n_at > 0)THEN
 
@@ -2020,6 +2327,20 @@ CONTAINS
           END IF
        END DO
     END IF
+    IF(first_mpi_go_split > 0)THEN    
+       DO jj = 1, 3 ! loop over x,y,z
+          IF(btype(jj) == wall_bound_index)THEN ! harmonic wall
+             DO ii = first_mpi_go_split, last_mpi_go_split ! loop over atoms of this cpu
+                ! add the potential doe to the wall
+                IF(gos(ii)%pos(jj) < 0.d0)THEN
+                   mpi_ene_con = mpi_ene_con + 0.5d0*bval(jj)*gos(ii)%pos(jj)**2
+                ELSE IF(gos(ii)%pos(jj) > cell(jj))THEN
+                   mpi_ene_con = mpi_ene_con + 0.5d0*bval(jj)*(gos(ii)%pos(jj)-cell(jj))**2
+                END IF
+             END DO
+          END IF
+       END DO
+    END IF
 
     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     ! Energy due to constraints !
@@ -2071,6 +2392,29 @@ CONTAINS
           END DO
        END IF
        mpi_ene = mpi_ene + mpi_ene_con
+
+       IF(first_mpi_go_split > 0)THEN
+          DO ii = first_mpi_go_split, last_mpi_go_split ! loop over atoms of this cpu
+             got_displ = .false.
+             DO jj = 1, 3 ! loop over x,y,z
+                SELECT CASE(gos(ii)%constrained(jj)) ! type of constraint
+                CASE(harmonic_well_index) ! harmonic well
+                   IF(.NOT.got_displ)THEN
+                      displ = displacement(gos(ii),cell,pbc)
+                      got_displ = .true.
+                   END IF
+                   mpi_ene_con = mpi_ene_con+0.5d0*gos(ii)%well(jj)*(displ(jj))**2
+                CASE(ext_force_index) ! external force
+                   IF(.NOT.got_displ)THEN
+                      displ = displacement(gos(ii),cell,pbc)
+                      got_displ = .true.
+                   END IF
+                   mpi_ene_con = mpi_ene_con-gos(ii)%well(jj)*(displ(jj))                
+                END SELECT
+             END DO
+          END DO
+       END IF
+       mpi_ene = mpi_ene + mpi_ene_con
     END IF
 
 #ifdef MPI
@@ -2087,6 +2431,22 @@ CONTAINS
          MPI_COMM_WORLD,mpistat)
     CALL MPI_REDUCE(mpi_ene_con,ene_con,1,MPI_DOUBLE_PRECISION,MPI_SUM,master_cpu,&
          MPI_COMM_WORLD,mpistat)
+    CALL MPI_REDUCE(mpi_ene_mbgo,ene_mbgo,1,MPI_DOUBLE_PRECISION,MPI_SUM,master_cpu,&
+         MPI_COMM_WORLD,mpistat)
+    CALL MPI_REDUCE(mpi_ene_go,ene_go,1,MPI_DOUBLE_PRECISION,MPI_SUM,master_cpu,&
+         MPI_COMM_WORLD,mpistat)
+    CALL MPI_REDUCE(mpi_ene_stretch,ene_stretch,1,MPI_DOUBLE_PRECISION,MPI_SUM,master_cpu,&
+         MPI_COMM_WORLD,mpistat)
+    CALL MPI_REDUCE(mpi_ene_bend,ene_bend,1,MPI_DOUBLE_PRECISION,MPI_SUM,master_cpu,&
+         MPI_COMM_WORLD,mpistat)
+    CALL MPI_REDUCE(mpi_ene_torsion,ene_torsion,1,MPI_DOUBLE_PRECISION,MPI_SUM,master_cpu,&
+         MPI_COMM_WORLD,mpistat)
+    CALL MPI_REDUCE(mpi_ene_native,ene_native,1,MPI_DOUBLE_PRECISION,MPI_SUM,master_cpu,&
+         MPI_COMM_WORLD,mpistat)
+    CALL MPI_REDUCE(mpi_ene_nonnat,ene_nonnat,1,MPI_DOUBLE_PRECISION,MPI_SUM,master_cpu,&
+         MPI_COMM_WORLD,mpistat)
+
+
 #else
     ene = mpi_ene
     ene_lj = mpi_ene_lj
@@ -2094,6 +2454,13 @@ CONTAINS
     ene_ma = mpi_ene_ma
     ene_aa = mpi_ene_aa
     ene_con = mpi_ene_con
+    ene_mbgo = mpi_ene_mbgo
+    ene_go = mpi_ene_go
+    ene_stretch = mpi_ene_stretch
+    ene_bend = mpi_ene_bend
+    ene_torsion = mpi_ene_torsion
+    ene_native = mpi_ene_native
+    ene_nonnat = mpi_ene_nonnat
 #endif
 
     RETURN
@@ -2230,19 +2597,22 @@ CONTAINS
   ! *torque torques acting on molecules
   ! *a_force forces acting on atoms
   ! *apply_thermostat if false, forces due to thermostat are not applied
-  SUBROUTINE calc_forces(mbs,ats,mm_nbors,mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,&
-       bonds,cell,pbc,btype,bval,control,params,is_constr,apply_thermostat,&
-       m_force,torque,a_force,virial,n_bond)
+  SUBROUTINE calc_forces(mbs,ats,gos,mm_nbors,&
+       mm_n_ns,ma_nbors,ma_n_ns,aa_nbors,aa_n_ns,mg_nbors,mg_n_ns,&
+       bonds,cell,pbc,btype,bval,control,params,go,is_constr,apply_thermostat,&
+       m_force,torque,a_force,g_force,virial,n_bond)
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     TYPE(mbps), INTENT(IN) :: params
     TYPE(cps), INTENT(IN) :: control
+    TYPE(gops), INTENT(IN) :: go
     REAL(KIND=dp), INTENT(IN) :: cell(3), bval(3)
     INTEGER, INTENT(IN) :: btype(3)
     LOGICAL, INTENT(IN) :: pbc(3), is_constr
     LOGICAL, INTENT(IN) :: apply_thermostat
-    REAL(KIND=dp), POINTER :: m_force(:,:), torque(:,:), a_force(:,:), n_bond(:)
+    REAL(KIND=dp), POINTER :: m_force(:,:), torque(:,:), a_force(:,:), g_force(:,:), n_bond(:)
     REAL(KIND=dp), INTENT(OUT) :: virial
     REAL(KIND=dp) :: g_ijkl(4,4), phi_ijkl(4,4), phi, rij, inv_rij, &
          nablaphi(3,4,4), nablaphi_term(3,4,4), sum_nphi(3), dtricos, boi, boj, &
@@ -2251,12 +2621,17 @@ CONTAINS
          Fpair_ij(3), Tpair_i(3), Tpair_j(3), &
          torquephi(3,4,4), torquephi_term(3,4,4), sum_tphi(3), &
          torquephij(3,4,4), torquephi_termj(3,4,4), sum_tphij(3), &
-         Many_coeff, sum_g_times_phi, many_coeff_i, many_coeff_j, displ(3), thevirial, limit1, limit2
+         Many_coeff, sum_g_times_phi, many_coeff_i, many_coeff_j, displ(3), thevirial, limit1, limit2, &
+         ratio, vij2(3), hij2(3), rij2, inv_rij2, vij3(3), hij3(3), rij3, inv_rij3, factor, &
+         dot, cosine, tmp1(3), tmp2(3), tmp3(3), &
+         Fcomponent1(3), Fcomponent2(3), Fcomponent3(3), Fcomponent4(3), projection1(3), projection2(3), &
+         v12(3), v23(3), v34(3), inv_p1, inv_p2, inv_r2, ddot(3,4), dp1(3,4), dp2(3,4)
     REAL(KIND=dp), POINTER :: bonds(:)
     INTEGER, POINTER :: mm_nbors(:,:), mm_n_ns(:), &
          ma_nbors(:,:), ma_n_ns(:), &
-         aa_nbors(:,:), aa_n_ns(:)
-    INTEGER :: n_mb, n_at, ii, jj, nj, kk, ll, mm, nn, ns, &
+         aa_nbors(:,:), aa_n_ns(:), &
+         mg_nbors(:,:), mg_n_ns(:)
+    INTEGER :: n_mb, n_at, n_go, ii, jj, nj, kk, ll, mm, nn, ns, &
          qq, tt, third, nsj, qj, type, type2, ia
     LOGICAL :: visited, got_displ
 
@@ -2264,18 +2639,23 @@ CONTAINS
     m_force = 0.d0
     torque = 0.d0
     a_force = 0.d0
+    g_force = 0.d0
     small_m_force = 0.d0
     small_torque = 0.d0
     small_a_force = 0.d0
+    small_g_force = 0.d0
     tiny_m_force = 0.d0
     tiny_torque = 0.d0
     tiny_a_force = 0.d0
+    tiny_g_force = 0.d0
     mpi_m_force = 0.d0
     mpi_torque = 0.d0
     mpi_a_force = 0.d0
+    mpi_g_force = 0.d0
     virial = 0.d0
     n_mb = SIZE(mbs)
     n_at = SIZE(ats)
+    n_go = SIZE(gos)
     
     limit1 = 1.0E-8
     limit2 = 1.0E-16
@@ -2349,7 +2729,7 @@ CONTAINS
 !!$                      mpi_m_force(1:3,nj) = mpi_m_force(1:3,nj) - Fpair_ij
 
                    ! get the virial
-                   virial = virial - (Fpair_ij.o.vij)
+                   virial = virial - (Fpair_ij.o.hij)
                    
                    Fpair_ij = 0.d0
                 END IF
@@ -2559,7 +2939,7 @@ CONTAINS
 !!$                      mpi_torque(1:3,nj) = mpi_torque(1:3,nj) + Tpair_j
                    
                    ! get the virial
-                   virial = virial - (Fpair_ij.o.vij)
+                   virial = virial - (Fpair_ij.o.hij)
                    
                    ! calculate the many-body terms incorporating the pair
                    ! of molecules ii and nj, i.e. the terms where the sum of g_ijkl*phi_ijkl
@@ -2744,7 +3124,7 @@ CONTAINS
                             mpi_a_force(ia,nj) = mpi_a_force(ia,nj) - Fpair_ij(ia)
                          ELSE IF(ABS(Fpair_ij(ia)) > limit2 .AND. ABS(Fpair_ij(ia)) <= limit1)THEN
                             small_m_force(ia,ii) = small_m_force(ia,ii) + Fpair_ij(ia)
-                            small_a_force(1:3,nj) = small_a_force(ia,nj) - Fpair_ij(ia)
+                            small_a_force(ia,nj) = small_a_force(ia,nj) - Fpair_ij(ia)
                          ELSE IF(ABS(Fpair_ij(ia)) <= limit2)THEN
                             tiny_m_force(ia,ii) = tiny_m_force(ia,ii) + Fpair_ij(ia)
                             tiny_a_force(ia,nj) = tiny_a_force(ia,nj) - Fpair_ij(ia)
@@ -2755,7 +3135,7 @@ CONTAINS
 !!$                         mpi_a_force(1:3,nj) = mpi_a_force(1:3,nj) - Fpair_ij
                       
                       ! get the virial
-                      virial = virial - (Fpair_ij.o.vij)
+                      virial = virial - (Fpair_ij.o.hij)
                    END IF
                    
                 END IF
@@ -2808,7 +3188,7 @@ CONTAINS
                          mpi_torque(1:3,ii) = mpi_torque(1:3,ii) + params%l_oh*(armsi(1:3,kk).x.Fpair_ij)
 
                          ! get the virial
-                         virial = virial - (Fpair_ij.o.vij)
+                         virial = virial - (Fpair_ij.o.hij)
                          
                       END IF
                       
@@ -2819,7 +3199,315 @@ CONTAINS
              END DO
           END DO          
        END IF
+
+
+
+
+       !!!!!!!!!!!!!!!!!!
+       ! MB - go forces !
+       !!!!!!!!!!!!!!!!!!
+
+       IF(n_go > 0)THEN
+          DO ii = first_mpi_mb, last_mpi_mb ! loop over mbs of this cpu
+             ns = mg_n_ns(ii)
+             DO jj = 1, ns ! loop over neighbors
+                nj = mg_nbors(jj,ii)
+                Fpair_ij = 0.d0
+                type = nj
+                
+                ! we only loop over MB-atom pairs (not atom-MB), so no double counting occurs
+                
+                ! vector and distance between ii ans nj
+                vij(1:3) = vector(mbs(ii),gos(nj),cell,pbc)
+                hij = vij
+                rij = sqrt(vij.o.vij)
+                inv_rij = 1.d0/rij
+                vij = vij*inv_rij
+
+                IF(rij < params%cut_lj)THEN ! cutoff
+
+                   ratio = go%sigma / rij
+                   ratio = ratio*ratio*ratio*ratio*ratio*ratio
+                      
+                   ! get the pairwise force
+                   Fpair_ij = 24.d0*go%epsilon_water(type)*inv_rij* &
+                        ( ratio - 2.d0*ratio*ratio )*vij(1:3)
+
+                   ! add to the total force
+                   !WHERE(Fpair_ij < 1.0E-36) Fpair_ij = 0.d0
+                   DO ia = 1, 3
+                      IF(ABS(Fpair_ij(ia)) > limit1)THEN
+                         mpi_m_force(ia,ii) = mpi_m_force(ia,ii) + Fpair_ij(ia)
+                         mpi_g_force(ia,nj) = mpi_g_force(ia,nj) - Fpair_ij(ia)
+                      ELSE IF(ABS(Fpair_ij(ia)) > limit2 .AND. ABS(Fpair_ij(ia)) <= limit1)THEN
+                         small_m_force(ia,ii) = small_m_force(ia,ii) + Fpair_ij(ia)
+                         small_g_force(ia,nj) = small_g_force(ia,nj) - Fpair_ij(ia)
+                      ELSE IF(ABS(Fpair_ij(ia)) <= limit2)THEN
+                         tiny_m_force(ia,ii) = tiny_m_force(ia,ii) + Fpair_ij(ia)
+                         tiny_g_force(ia,nj) = tiny_g_force(ia,nj) - Fpair_ij(ia)
+                      END IF
+                   END DO
+                      
+                   ! get the virial
+                   virial = virial - (Fpair_ij.o.hij)
+                END IF
+                   
+                
+             END DO
+          END DO
+       END IF
+
     END IF
+
+
+    !!!!!!!!!!!!!!!!!!
+    ! go - go forces !
+    !!!!!!!!!!!!!!!!!!
+
+    IF(n_go > 0)THEN
+
+       IF(first_mpi_go_split > 0)THEN
+          DO ii = first_mpi_go_split, last_mpi_go_split ! loop over gos of this cpu
+
+             IF(ii < go%length)THEN ! skip the last index so that ii+1 stays in bounds
+                ! vector and distance between ii ans ii+1
+                vij(1:3) = vector(gos(ii),gos(ii+1),cell,pbc)
+                hij = vij
+                rij = sqrt(vij.o.vij)
+                inv_rij = 1.d0/rij
+                vij = vij*inv_rij
+                
+                ! get the pairwise force
+                Fpair_ij = go%kr * 2.d0* (rij-go%r_chain(ii))*vij(1:3)
+
+                ! add to the total force
+                !WHERE(Fpair_ij < 1.0E-36) Fpair_ij = 0.d0
+                DO ia = 1, 3
+                   IF(ABS(Fpair_ij(ia)) > limit1)THEN
+                      mpi_g_force(ia,ii) = mpi_g_force(ia,ii) + Fpair_ij(ia)
+                      mpi_g_force(ia,ii+1) = mpi_g_force(ia,ii+1) - Fpair_ij(ia)
+                   ELSE IF(ABS(Fpair_ij(ia)) > limit2 .AND. ABS(Fpair_ij(ia)) <= limit1)THEN
+                      small_g_force(ia,ii) = small_g_force(ia,ii) + Fpair_ij(ia)
+                      small_g_force(ia,ii+1) = small_g_force(ia,ii+1) - Fpair_ij(ia)
+                   ELSE IF(ABS(Fpair_ij(ia)) <= limit2)THEN
+                      tiny_g_force(ia,ii) = tiny_g_force(ia,ii) + Fpair_ij(ia)
+                      tiny_g_force(ia,ii+1) = tiny_g_force(ia,ii+1) - Fpair_ij(ia)
+                   END IF
+                END DO
+                
+                ! get the virial
+                virial = virial - (Fpair_ij.o.hij)
+                
+                IF(ii < go%length-1)THEN
+                   ! vector and distance between ii+1 ans ii+2
+                   vij2(1:3) = vector(gos(ii+1),gos(ii+2),cell,pbc)
+                   hij2 = vij2
+                   rij2 = sqrt(vij2.o.vij2)
+                   inv_rij2 = 1.d0/rij2
+                   vij2 = vij2*inv_rij2
+                   
+                   dot = -(hij .o. hij2)
+                   cosine = dot * inv_rij * inv_rij2
+
+                   tmp1 = hij2 + dot * inv_rij * inv_rij * hij
+                   tmp2 = -hij - dot * inv_rij2 * inv_rij2 * hij2
+
+                   ! nabla cos theta:
+                   ! Fcomponent1 = -tmp1 * inv_rij * inv_rij2
+                   ! Fcomponent2 = -tmp2 * inv_rij * inv_rij2
+
+                   ! nabla theta = - nabla cos theta / sqrt(1 - cos^2 theta)
+                   ratio = 1.d0 / sqrt(1.d0 - cosine*cosine)
+                   !Fcomponent1 = tmp1 * inv_rij * inv_rij2 * ratio
+                   !Fcomponent2 = tmp2 * inv_rij * inv_rij2 * ratio
+                   
+                   ! nabla K (theta - theta0)^2 = 2K (theta-theta0) * nabla theta
+                   factor = 2.d0*go%ktheta * (acos(cosine) - go%theta_chain(ii))
+                   Fcomponent1 = tmp1 * inv_rij * inv_rij2 * ratio * factor
+                   Fcomponent2 = tmp2 * inv_rij * inv_rij2 * ratio * factor
+
+                   DO ia = 1, 3
+                      IF(ABS(Fcomponent1(ia)) > limit1)THEN
+                         mpi_g_force(ia,ii) = mpi_g_force(ia,ii) + Fcomponent1(ia)
+                         mpi_g_force(ia,ii+1) = mpi_g_force(ia,ii+1) - Fcomponent1(ia)
+                      ELSE IF(ABS(Fcomponent1(ia)) > limit2 .AND. ABS(Fcomponent1(ia)) <= limit1)THEN
+                         small_g_force(ia,ii) = small_g_force(ia,ii) + Fcomponent1(ia)
+                         small_g_force(ia,ii+1) = small_g_force(ia,ii+1) - Fcomponent1(ia)
+                      ELSE IF(ABS(Fcomponent1(ia)) <= limit2)THEN
+                         tiny_g_force(ia,ii) = tiny_g_force(ia,ii) + Fcomponent1(ia)
+                         tiny_g_force(ia,ii+1) = tiny_g_force(ia,ii+1) - Fcomponent1(ia)
+                      END IF
+                   END DO
+                   DO ia = 1, 3
+                      IF(ABS(Fcomponent2(ia)) > limit1)THEN
+                         mpi_g_force(ia,ii+2) = mpi_g_force(ia,ii+2) + Fcomponent2(ia)
+                         mpi_g_force(ia,ii+1) = mpi_g_force(ia,ii+1) - Fcomponent2(ia)
+                      ELSE IF(ABS(Fcomponent2(ia)) > limit2 .AND. ABS(Fcomponent2(ia)) <= limit1)THEN
+                         small_g_force(ia,ii+2) = small_g_force(ia,ii+2) + Fcomponent2(ia)
+                         small_g_force(ia,ii+1) = small_g_force(ia,ii+1) - Fcomponent2(ia)
+                      ELSE IF(ABS(Fcomponent2(ia)) <= limit2)THEN
+                         tiny_g_force(ia,ii+2) = tiny_g_force(ia,ii+2) + Fcomponent2(ia)
+                         tiny_g_force(ia,ii+1) = tiny_g_force(ia,ii+1) - Fcomponent2(ia)
+                      END IF
+                   END DO
+
+                   ! get the virial
+                   virial = virial - (Fcomponent1.o.hij) + (Fcomponent2.o.hij2)
+
+                   IF(ii < go%length-2)THEN
+
+                      ! vector and distance between ii+2 ans ii+3
+                      vij3(1:3) = vector(gos(ii+2),gos(ii+3),cell,pbc)
+                      hij3 = vij3
+                      rij3 = sqrt(vij3.o.vij3)
+                      inv_rij3 = 1.d0/rij3
+                      vij3 = vij2*inv_rij3
+
+                      ! projections
+                      projection1 = -(hij - (hij .o. hij2) * inv_rij2 * inv_rij2 * hij2)
+                      projection2 = (hij3 - (hij3 .o. hij2) * inv_rij2 * inv_rij2 *hij2)
+                            
+                      inv_r2 = inv_rij2 * inv_rij2
+                      v12 = hij
+                      v23 = hij2
+                      v34 = hij3
+
+                      inv_p1 = 1.d0 / (.norm.projection1)
+                      inv_p2 = 1.d0 / (.norm.projection2)
+                      ratio = inv_p1 * inv_p2
+                      dot = projection1 .o. projection2 
+                      
+                      ! cos phi = (p_21 . p_34) / ( |p_21| |p_34| ) = dot*ratio
+                      cosine = dot*ratio
+
+                      ! D p.p' / (|p||p'|) =
+                      ! D (p.p') / (|p||p'|) +
+                      ! p.p' / (|p||p'|^2) D |p'| +
+                      ! p.p' / (|p|^2|p'|) D |p|
+                      
+                      ! D (p.p') / (|p||p'|) :       
+                      
+                      ddot = 0.d0
+                      ddot(1:3,1) =  -( v34 - (v34 .o. v23) * inv_r2 * v23 )
+                      ddot(1:3,2) =  ( v34 - &
+                           (v34 .o. v23) * inv_r2 * (v23 - v12) + &
+                           (v12 .o. v23) * inv_r2 * v34 - &
+                           2.d0 * (v12 .o. v23) * (v34 .o. v23) * inv_r2 * inv_r2 * v23 )
+                      ddot(1:3,3) =  -( v12 + &
+                           (v34 .o. v23) * inv_r2 * v12 + &
+                           (v12 .o. v23) * inv_r2 * (v34 - v23) - &
+                           2.d0 * (v12 .o. v23) * (v34 .o. v23) * inv_r2 * inv_r2 * v23 )
+                      ddot(1:3,4) =  ( v12 - (v12 .o. v23) *inv_r2 * v23 )
+                      ddot = ddot
+                      
+                      ! p.p' / (|p||p'|^2) D |p'| = p.p' / (2|p||p'|^3) D (p'.p')
+                      dp2 = 0.d0
+                      dp2(1:3,2) = (v34 .o. v23) * inv_r2 * v34 - &
+                           (v34 .o. v23)**2 * inv_r2 * inv_r2 * v23 
+                      dp2(1:3,3) = -v34 + &
+                           (v34 .o. v23) * inv_r2 * (v23 - v34) + &
+                           (v34 .o. v23)**2 * inv_r2 * inv_r2 * v23
+                      dp2(1:3,4) = v34 - (v34 .o. v23) * inv_r2 * v23
+                      dp2 = dp2 * dot * inv_p2 * inv_p2
+    
+                      ! p.p' / (|p|^2|p'|) D |p| = p.p' / (2|p|^3|p'|) D (p.p)
+                      dp1 = 0.d0
+                      dp1(1:3,1) = -v12 + (v12 .o. v23) * inv_r2 * v23
+                      dp1(1:3,2) = v12 - &
+                           (v12 .o. v23) * inv_r2 * (v23 - v12) - &
+                           (v12 .o. v23)**2 * inv_r2 * inv_r2 * v23
+                      dp1(1:3,3) = &
+                           -(v12 .o. v23) * inv_r2 * v12 + &
+                           (v12 .o. v23)**2 * inv_r2 * inv_r2 * v23
+                      dp1 = dp1 * dot * inv_p1 * inv_p1
+    
+                      phi = acos(cosine)
+                      ratio = ratio / sqrt(1.d0 - cosine*cosine) * &
+                           ( go%kphi1 * sin(phi - go%phi_chain(ii)) + &
+                             go%kphi2 * 3.d0*sin( 3.d0*(phi - go%phi_chain(ii)) ) )
+                      Fcomponent1(1:3) = ratio * ( ddot(1:3,1) + dp1(1:3,1) + dp2(1:3,1) )
+                      Fcomponent2(1:3) = ratio * ( ddot(1:3,2) + dp1(1:3,2) + dp2(1:3,2) )
+                      Fcomponent3(1:3) = ratio * ( ddot(1:3,3) + dp1(1:3,3) + dp2(1:3,3) )
+                      Fcomponent4(1:3) = ratio * ( ddot(1:3,4) + dp1(1:3,4) + dp2(1:3,4) )
+                                            
+                      DO ia = 1, 3
+                         IF(ABS(Fcomponent1(ia)) > limit1)THEN
+                            mpi_g_force(ia,ii) = mpi_g_force(ia,ii) + Fcomponent1(ia)
+                         ELSE IF(ABS(Fcomponent1(ia)) > limit2 .AND. ABS(Fcomponent1(ia)) <= limit1)THEN
+                            small_g_force(ia,ii) = small_g_force(ia,ii) + Fcomponent1(ia)
+                         ELSE IF(ABS(Fcomponent1(ia)) <= limit2)THEN
+                            tiny_g_force(ia,ii) = tiny_g_force(ia,ii) + Fcomponent1(ia)
+                         END IF
+                         IF(ABS(Fcomponent2(ia)) > limit1)THEN
+                            mpi_g_force(ia,ii+1) = mpi_g_force(ia,ii+1) + Fcomponent2(ia)
+                         ELSE IF(ABS(Fcomponent2(ia)) > limit2 .AND. ABS(Fcomponent2(ia)) <= limit1)THEN
+                            small_g_force(ia,ii+1) = small_g_force(ia,ii+1) + Fcomponent2(ia)
+                         ELSE IF(ABS(Fcomponent2(ia)) <= limit2)THEN
+                            tiny_g_force(ia,ii+1) = tiny_g_force(ia,ii+1) + Fcomponent2(ia)
+                         END IF
+                         IF(ABS(Fcomponent3(ia)) > limit1)THEN
+                            mpi_g_force(ia,ii+2) = mpi_g_force(ia,ii+2) + Fcomponent3(ia)
+                         ELSE IF(ABS(Fcomponent3(ia)) > limit2 .AND. ABS(Fcomponent3(ia)) <= limit1)THEN
+                            small_g_force(ia,ii+2) = small_g_force(ia,ii+2) + Fcomponent3(ia)
+                         ELSE IF(ABS(Fcomponent3(ia)) <= limit2)THEN
+                            tiny_g_force(ia,ii+2) = tiny_g_force(ia,ii+2) + Fcomponent3(ia)
+                         END IF
+                         IF(ABS(Fcomponent4(ia)) > limit1)THEN
+                            mpi_g_force(ia,ii+3) = mpi_g_force(ia,ii+3) + Fcomponent4(ia)
+                         ELSE IF(ABS(Fcomponent4(ia)) > limit2 .AND. ABS(Fcomponent4(ia)) <= limit1)THEN
+                            small_g_force(ia,ii+3) = small_g_force(ia,ii+3) + Fcomponent4(ia)
+                         ELSE IF(ABS(Fcomponent4(ia)) <= limit2)THEN
+                            tiny_g_force(ia,ii+3) = tiny_g_force(ia,ii+3) + Fcomponent4(ia)
+                         END IF
+                      END DO
+
+                   END IF
+
+                END IF
+
+             END IF
+
+             ! native and non-native bonds / repulsion
+             DO jj = ii+4, go%length
+                vij(1:3) = vector(gos(ii),gos(jj),cell,pbc) ! vector from ii+2 to ii+3
+                hij = vij
+                rij = sqrt(vij.o.vij) ! distance from ii+2 to ii+3
+                inv_rij = 1.d0/rij    ! inverse distance from ii+2 to ii+3
+                vij = vij*inv_rij     ! unit vector from ii+2 to ii+3
+                IF(go%r_native(ii,jj) > 0.d0)THEN
+                   ratio = go%r_native(ii,jj) * inv_rij
+                   Fpair_ij = go%epsilon * inv_rij * ( 60.d0*ratio**10 - 60.d0 * ratio**12 )*vij
+                ELSE
+                   ratio = go%r_rep * inv_rij
+                   ratio = ratio*ratio*ratio*ratio*ratio*ratio
+                   Fpair_ij = 12.d0*go%epsilon * inv_rij * ( -ratio*ratio )*vij
+                END IF
+
+                ! add to the total force
+                !WHERE(Fpair_ij < 1.0E-36) Fpair_ij = 0.d0
+                DO ia = 1, 3
+                   IF(ABS(Fpair_ij(ia)) > limit1)THEN
+                      mpi_g_force(ia,ii) = mpi_g_force(ia,ii) + Fpair_ij(ia)
+                      mpi_g_force(ia,jj) = mpi_g_force(ia,jj) - Fpair_ij(ia)
+                   ELSE IF(ABS(Fpair_ij(ia)) > limit2 .AND. ABS(Fpair_ij(ia)) <= limit1)THEN
+                      small_g_force(ia,ii) = small_g_force(ia,ii) + Fpair_ij(ia)
+                      small_g_force(ia,jj) = small_g_force(ia,jj) - Fpair_ij(ia)
+                   ELSE IF(ABS(Fpair_ij(ia)) <= limit2)THEN
+                      tiny_g_force(ia,ii) = tiny_g_force(ia,ii) + Fpair_ij(ia)
+                      tiny_g_force(ia,jj) = tiny_g_force(ia,jj) - Fpair_ij(ia)
+                   END IF
+                END DO
+
+                ! get the virial
+                virial = virial - (Fpair_ij.o.hij)
+
+             END DO
+
+          END DO
+       END IF
+
+    END IF
+
 
     !!!!!!!!!!!!!!!!!!!!!!
     ! atom - atom forces !
@@ -2868,7 +3556,7 @@ CONTAINS
 !!$                         mpi_a_force(1:3,nj) = mpi_a_force(1:3,nj) - Fpair_ij
 
                       ! get the virial
-                      virial = virial - (Fpair_ij.o.vij)
+                      virial = virial - (Fpair_ij.o.hij)
 
                    END IF
 
@@ -2904,6 +3592,19 @@ CONTAINS
                    mpi_a_force(jj,ii) = mpi_a_force(jj,ii) - bval(jj)*ats(ii)%pos(jj)
                 ELSE IF(ats(ii)%pos(jj) > cell(jj))THEN
                    mpi_a_force(jj,ii) = mpi_a_force(jj,ii) - bval(jj)*(ats(ii)%pos(jj)-cell(jj))
+                END IF
+             END DO
+          END IF
+       END DO
+    END IF
+    IF(first_mpi_go_split > 0)THEN
+       DO jj = 1, 3 ! loop over x, y, z
+          IF(btype(jj) == wall_bound_index)THEN ! harmonic wall boundary
+             DO ii = first_mpi_go_split, last_mpi_go_split ! loop over the atoms of this cpu
+                IF(gos(ii)%pos(jj) < 0.d0)THEN
+                   mpi_g_force(jj,ii) = mpi_g_force(jj,ii) - bval(jj)*gos(ii)%pos(jj)
+                ELSE IF(gos(ii)%pos(jj) > cell(jj))THEN
+                   mpi_g_force(jj,ii) = mpi_g_force(jj,ii) - bval(jj)*(gos(ii)%pos(jj)-cell(jj))
                 END IF
              END DO
           END IF
@@ -2949,6 +3650,24 @@ CONTAINS
              END DO
           END DO
        END IF
+
+       IF(first_mpi_go_split > 0)THEN
+          DO ii = first_mpi_go_split, last_mpi_go_split ! loop over the atoms of this cpu
+             got_displ = .false.
+             DO jj = 1, 3 ! loop over x, y, z
+                SELECT CASE(gos(ii)%constrained(jj))
+                CASE(harmonic_well_index) ! harmonic well
+                   IF(.NOT.got_displ)THEN
+                      displ = displacement(gos(ii),cell,pbc)
+                      got_displ = .true.
+                   END IF
+                   mpi_g_force(jj,ii) = mpi_g_force(jj,ii) - gos(ii)%well(jj)*(displ(jj))
+                CASE(ext_force_index) ! external force
+                   mpi_g_force(jj,ii) = mpi_g_force(jj,ii) + gos(ii)%well(jj)
+                END SELECT
+             END DO
+          END DO
+       END IF
     END IF
 
 #ifdef MPI
@@ -2974,6 +3693,7 @@ CONTAINS
        torque = mpi_torque
 #endif
     END IF
+
     IF(n_at > 0)THEN
        small_a_force = small_a_force + tiny_a_force
        mpi_a_force = mpi_a_force + small_a_force
@@ -2982,6 +3702,18 @@ CONTAINS
             MPI_SUM,MPI_COMM_WORLD,mpistat)
 #else
        a_force = mpi_a_force
+#endif
+    END IF
+
+
+    IF(n_go > 0)THEN
+       small_g_force = small_g_force + tiny_g_force
+       mpi_g_force = mpi_g_force + small_g_force
+#ifdef MPI
+       CALL MPI_ALLREDUCE(mpi_g_force,g_force,SIZE(g_force),MPI_DOUBLE_PRECISION,&
+            MPI_SUM,MPI_COMM_WORLD,mpistat)
+#else
+       g_force = mpi_g_force
 #endif
     END IF
 
@@ -3024,7 +3756,8 @@ CONTAINS
        ! each cpu should add the thermostat by itself, since langevin uses random numbers
        ! and the cpus have identical rnd sequences.
        ! if the random force calculations were split, the forces would be correlated
-       CALL add_thermostat_to_forces(mbs,ats,n_mb,n_at,control,params,m_force,torque,a_force)
+       CALL add_thermostat_to_forces(mbs,ats,gos,n_mb,n_at,n_go,&
+            control,params,go,m_force,torque,a_force,g_force)
 
     END IF
 
@@ -3044,20 +3777,23 @@ CONTAINS
   ! *m_force forces on molecules
   ! *torque torques on molecules
   ! *a_force forces on atoms
-  SUBROUTINE add_thermostat_to_forces(mbs,ats,n_mb,n_at,control,params,m_force,torque,a_force)
+  SUBROUTINE add_thermostat_to_forces(mbs,ats,gos,n_mb,n_at,n_go,&
+       control,params,go,m_force,torque,a_force,g_force)
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
-    INTEGER, INTENT(IN) :: n_mb, n_at
+    TYPE(gop), POINTER :: gos(:)
+    INTEGER, INTENT(IN) :: n_mb, n_at, n_go
     TYPE(mbps), INTENT(IN) :: params
     TYPE(cps), INTENT(IN) :: control
-    REAL(KIND=dp), POINTER :: m_force(:,:), torque(:,:), a_force(:,:)
+    TYPE(gops), INTENT(IN) :: go
+    REAL(KIND=dp), POINTER :: m_force(:,:), torque(:,:), a_force(:,:), g_force(:,:)
 
     IF(control%md_thermo == langevin_index)THEN ! Langevin thermostat
-       CALL add_random_force(ats,n_mb,n_at,control,params,m_force,torque,a_force)
-       CALL add_friction_force(mbs,ats,n_mb,n_at,control,m_force,torque,a_force)
+       CALL add_random_force(ats,n_mb,n_at,n_go,control,params,go,m_force,torque,a_force,g_force)
+       CALL add_friction_force(mbs,ats,gos,n_mb,n_at,n_go,control,go,m_force,torque,a_force,g_force)
     ELSE IF(control%md_thermo == cooler_index)THEN ! only friction to cool down the system
-       CALL add_friction_force(mbs,ats,n_mb,n_at,control,m_force,torque,a_force)
+       CALL add_friction_force(mbs,ats,gos,n_mb,n_at,n_go,control,go,m_force,torque,a_force,g_force)
     END IF
     
     RETURN
@@ -3073,13 +3809,15 @@ CONTAINS
   ! *m_force forces on molecules
   ! *torque torques on molecules
   ! *a_force forces on atoms
-  SUBROUTINE add_friction_force(mbs,ats,n_mb,n_at,control,m_force,torque,a_force)
+  SUBROUTINE add_friction_force(mbs,ats,gos,n_mb,n_at,n_go,control,go,m_force,torque,a_force,g_force)
     IMPLICIT NONE
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
-    INTEGER, INTENT(IN) :: n_mb, n_at
+    TYPE(gop), POINTER :: gos(:)
+    INTEGER, INTENT(IN) :: n_mb, n_at, n_go
     TYPE(cps), INTENT(IN) :: control
-    REAL(KIND=dp), POINTER :: m_force(:,:), torque(:,:), a_force(:,:)
+    TYPE(gops), INTENT(IN) :: go
+    REAL(KIND=dp), POINTER :: m_force(:,:), torque(:,:), a_force(:,:), g_force(:,:)
     INTEGER :: ii
 
     DO ii = 1, n_mb ! loop over mbs
@@ -3088,6 +3826,9 @@ CONTAINS
     END DO
     DO ii = 1, n_at ! loop over atoms
        a_force(1:3,ii) = a_force(1:3,ii) - ats(ii)%mass*control%thermo_value*ats(ii)%vel(:)
+    END DO
+    DO ii = 1, n_go ! loop over gos
+       g_force(1:3,ii) = g_force(1:3,ii) - gos(ii)%mass*control%thermo_value*gos(ii)%vel(:)
     END DO
     
     RETURN
@@ -3103,14 +3844,15 @@ CONTAINS
   ! *m_force forces on molecules
   ! *torque torques on molecules
   ! *a_force forces on atoms
-  SUBROUTINE add_random_force(ats,n_mb,n_at,control,params,m_force,torque,a_force)
+  SUBROUTINE add_random_force(ats,n_mb,n_at,n_go,control,params,go,m_force,torque,a_force,g_force)
     IMPLICIT NONE
     !TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
-    INTEGER, INTENT(IN) :: n_mb, n_at
+    INTEGER, INTENT(IN) :: n_mb, n_at, n_go
     TYPE(mbps), INTENT(IN) :: params
     TYPE(cps), INTENT(IN) :: control
-    REAL(KIND=dp), POINTER :: m_force(:,:), torque(:,:), a_force(:,:)
+    TYPE(gops), INTENT(IN) :: go
+    REAL(KIND=dp), POINTER :: m_force(:,:), torque(:,:), a_force(:,:), g_force(:,:)
     REAL(KIND=dp) :: langevin1, langevin2, random, rnd_vector(3), spare_vector(3)
     INTEGER :: ii, jj
     LOGICAL :: got_spare
@@ -3131,6 +3873,12 @@ CONTAINS
           DO jj = 1, 3 ! loop over x, y, z
              CALL genrand_real1(random)
              a_force(jj,ii) = a_force(jj,ii) + langevin1*sqrt(params%m_atoms(ats(ii)%type))*(random-0.5) ! add the random component for force
+          END DO
+       END DO
+       DO ii = 1, n_go ! loop over atoms
+          DO jj = 1, 3 ! loop over x, y, z
+             CALL genrand_real1(random)
+             g_force(jj,ii) = g_force(jj,ii) + langevin1*sqrt(go%mass_chain(ii))*(random-0.5) ! add the random component for force
           END DO
        END DO
     ELSE ! gaussian random forces - it's probably nicer than uniformly distributed, but also slower - in principle both work

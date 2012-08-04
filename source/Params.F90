@@ -64,9 +64,9 @@ MODULE parameters
        gaussian_limit = 8.d0, &
        scale_max = 0.05d0
 #ifdef MPI
-  CHARACTER(LEN=9), PARAMETER :: version = "   0.32 p"
+  CHARACTER(LEN=9), PARAMETER :: version = "  0.32g p"
 #else
-  CHARACTER(LEN=9), PARAMETER :: version = "     0.32"
+  CHARACTER(LEN=9), PARAMETER :: version = "    0.32g"
 #endif
 
   REAL(KIND=dp) :: kB=true_kB, m_scale=true_m_scale

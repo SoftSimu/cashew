@@ -81,22 +81,23 @@ MODULE mpi_mod
   INTEGER :: cpu_id
   INTEGER :: start_mpi_load, end_mpi_load, first_mpi_mb, last_mpi_mb, first_mpi_atom, last_mpi_atom
   INTEGER :: start_mpi_split, end_mpi_split, &
-       first_mpi_mb_split, last_mpi_mb_split, first_mpi_atom_split, last_mpi_atom_split
+       first_mpi_mb_split, last_mpi_mb_split, first_mpi_atom_split, last_mpi_atom_split, &
+       first_mpi_go_split, last_mpi_go_split
   INTEGER :: loadcount
   REAL(KIND=dp) :: stopwatch, my_load
 
   ! general variables
-  INTEGER :: n_cpus, n_parts, n_ms, n_as, mpistat
+  INTEGER :: n_cpus, n_parts, n_ms, n_as, n_gs, mpistat
 #ifdef MPI
   INTEGER :: mpistatus(MPI_STATUS_SIZE)
 #endif
   INTEGER :: mpi_qtrn, mpi_mb, mpi_atom
   INTEGER :: loadsteps = 1
 
-  REAL(KIND=dp), ALLOCATABLE :: mpi_m_force(:,:), mpi_torque(:,:), mpi_a_force(:,:)
+  REAL(KIND=dp), ALLOCATABLE :: mpi_m_force(:,:), mpi_torque(:,:), mpi_a_force(:,:), mpi_g_force(:,:)
   ! arrays for temporary storage of very small force terms (for numeric accuracy)
-  REAL(KIND=dp), POINTER :: small_m_force(:,:), small_torque(:,:), small_a_force(:,:)
-  REAL(KIND=dp), POINTER :: tiny_m_force(:,:), tiny_torque(:,:), tiny_a_force(:,:)
+  REAL(KIND=dp), POINTER :: small_m_force(:,:), small_torque(:,:), small_a_force(:,:), small_g_force(:,:)
+  REAL(KIND=dp), POINTER :: tiny_m_force(:,:), tiny_torque(:,:), tiny_a_force(:,:), tiny_g_force(:,:)
 
   REAL(KIND=dp), ALLOCATABLE :: loads(:), mpi_bonds(:), mpi_n_bond(:)
   INTEGER, ALLOCATABLE :: limits(:), new_limits(:), sendbuf(:), bondcount(:), bondpos(:)
@@ -434,13 +435,14 @@ CONTAINS
   ! Initializes the particle counters and arrays needed by the mpi machinery
   ! *mbs number of mbs
   ! *ats number atoms
-  SUBROUTINE set_particles(mbs,ats)
+  SUBROUTINE set_particles(mbs,ats,gos)
     IMPLICIT NONE
-    INTEGER, INTENT(IN) :: mbs, ats
+    INTEGER, INTENT(IN) :: mbs, ats, gos
     INTEGER :: ii
 
     n_ms = mbs
     n_as = ats
+    n_gs = gos
     n_parts = n_ms+n_as
     IF(n_parts/n_cpus < min_parts .AND. n_cpus > 1)THEN ! too many cpu's; end this madness!
        IF(cpu_id == master_cpu)THEN
@@ -459,6 +461,11 @@ CONTAINS
     ALLOCATE(tiny_m_force(3,n_ms))
     ALLOCATE(tiny_torque(3,n_ms))
     ALLOCATE(tiny_a_force(3,n_as))
+
+    ALLOCATE(mpi_g_force(3,n_gs))
+    ALLOCATE(small_g_force(3,n_gs))
+    ALLOCATE(tiny_g_force(3,n_gs))
+
     ALLOCATE(mpi_bonds( 1 : ((cpu_id+1)*n_ms)/n_cpus - (cpu_id*n_ms)/n_cpus ))
     ALLOCATE(bondcount(n_cpus))
     ALLOCATE(bondpos(n_cpus))
@@ -485,7 +492,7 @@ CONTAINS
        start_mpi_load = FLOOR(REAL(n_parts)*(1.0-sqrt(1.0-REAL(cpu_id)/REAL(n_cpus))))+1
        start_mpi_split = cpu_id*n_parts/n_cpus +1
     END IF
-    IF(cpu_id == n_cpus)THEN
+    IF(cpu_id == n_cpus-1)THEN
        end_mpi_load = n_parts 
        end_mpi_split = n_parts 
     ELSE
@@ -518,6 +525,7 @@ CONTAINS
   ! mb and atom index ranges for load splitting
   SUBROUTINE load_to_particles()
     IMPLICIT NONE
+    integer :: ii
 
     first_mpi_mb = 0
     last_mpi_mb = 0
@@ -556,6 +564,20 @@ CONTAINS
           first_mpi_atom_split = 1
        END IF
        last_mpi_atom_split = end_mpi_split-n_ms
+    END IF
+
+
+    ! split the go particles evenly
+    first_mpi_go_split = cpu_id*max(n_gs/n_cpus,1)+1
+    last_mpi_go_split = (cpu_id+1)*max(n_gs/n_cpus,1)
+    if(first_mpi_go_split > n_gs)then
+       first_mpi_go_split = 0
+       last_mpi_go_split = 0
+    else if(last_mpi_go_split > n_gs)then
+       last_mpi_go_split = n_gs
+    end if
+    IF(cpu_id == n_cpus-1 .and. last_mpi_go_split < n_gs .and. last_mpi_go_split /= 0)THEN
+       last_mpi_go_split = n_gs
     END IF
 
   END SUBROUTINE load_to_particles

@@ -1707,6 +1707,7 @@ CONTAINS
                 CALL abort_value(masstag, go_block)
              END IF
              READ(tokens(t_ind2:n_tokens),*,IOSTAT=iostat) go%mass_chain
+             go%mass_chain = go%mass_chain*m_scale
              IF(iostat /= 0) CALL abort("reading "//readtag(1:twidths(t_ind)))
              
           CASE(lengthstag) ! chain eq. bond lengths
@@ -4744,8 +4745,11 @@ CONTAINS
     CALL date_string(tvector(1),tvector(2),tvector(3),tvector(5),tvector(6),tvector(7),thetime)
 
     IF(cpu_id == master_cpu)THEN
-       WRITE(ioindex,'(A)') "\n"//HORILINE//"\n" ! line
-       WRITE(ioindex,'(A)') "  Simulation finished   "//thetime//"\n" ! time
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') HORILINE ! line
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') "  Simulation finished   "//thetime ! time
+       WRITE(ioindex,'(A)') ""
     END IF
 
     ! time difference from start
@@ -4755,14 +4759,16 @@ CONTAINS
 
     IF(cpu_id == master_cpu)THEN
        ! time consumption breakdown
-       WRITE(ioindex,'(A)') "  Wall clock time "//thetime//"\n"
+       WRITE(ioindex,'(A)') "  Wall clock time "//thetime
+       WRITE(ioindex,'(A)') ""
        WRITE(ioindex,'(A,F20.3,A)') "  Used CPU time:         ",time_tot," s"
        WRITE(ioindex,'(A,F20.3,A)') "     input/output:       ",time_io," s"
        WRITE(ioindex,'(A,F20.3,A)') "     analysis:           ",time_stat," s"
        WRITE(ioindex,'(A,F20.3,A)') "     finding neighbors:  ",time_nbor," s"
        WRITE(ioindex,'(A,F20.3,A)') "     calculating forces: ",time_force," s"
        WRITE(ioindex,'(A,F20.3,A)') "     updating system:    ",time_move," s"
-       WRITE(ioindex,'(A)') "\n"
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') ""
     END IF
 
     RETURN
@@ -4784,19 +4790,21 @@ CONTAINS
   ! *n_elems number of different types of atoms
   ! *found_types the number of atoms of each type
   ! *is_constr true if there are constraints in place
-  SUBROUTINE write_contfile(filename,mbs,ats,n_elems,&
-       params,control,cell,btype,bval,is_constr)
+  SUBROUTINE write_contfile(filename,mbs,ats,gos,n_elems,&
+       params,control,go,cell,btype,bval,is_constr)
     IMPLICIT NONE
     INTEGER :: ioindex
     CHARACTER(LEN=*) :: filename
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     REAL(KIND=dp), INTENT(IN) :: cell(3), bval(3)
     LOGICAL, INTENT(IN) :: is_constr
     INTEGER, INTENT(IN) :: n_elems, btype(3)
     !INTEGER, POINTER :: found_types(:)
     TYPE(mbps), INTENT(IN) :: params
     TYPE(cps), INTENT(IN) :: control
+    TYPE(gops), INTENT(IN) :: go
 
     IF(cpu_id == master_cpu)THEN
        ! open the output
@@ -4804,8 +4812,8 @@ CONTAINS
        OPEN(ioindex,FILE=filename)
        
        ! write by calling write_input
-       CALL write_input(ioindex,mbs,ats,n_elems,&
-            params,control,cell,btype,bval,is_constr)
+       CALL write_input(ioindex,mbs,ats,gos,n_elems,&
+            params,control,go,cell,btype,bval,is_constr)
        
        ! close the output
        CLOSE(ioindex)
@@ -4843,84 +4851,107 @@ CONTAINS
   ! *m_force forces acting on MB molecules
   ! *m_torque torques acting on MB molecules
   ! *a_force forces acting on atoms
-  SUBROUTINE write_header(ioindex,system,mbs,ats,n_elems,found_types,tvector,&
-       params,control,cell,btype,bval,pbc,is_constr,&
+  SUBROUTINE write_header(ioindex,system,mbs,ats,gos,n_elems,found_types,tvector,&
+       params,control,go,cell,btype,bval,pbc,is_constr,&
        e_kin,e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr,temper,&
-       m_force,m_torque,a_force,&
+       e_mbgo, e_go,  e_stretch, e_bend, e_torsion, e_native, e_nonnat, &
+       m_force,m_torque,a_force,g_force,&
        mm_nbors,mm_n_nbor,ma_nbors,ma_n_nbor,aa_nbors,aa_n_nbor)
     IMPLICIT NONE
     INTEGER, INTENT(IN) :: ioindex
     CHARACTER(LEN=*) :: system
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     REAL(KIND=dp), INTENT(IN) :: cell(3),bval(3),&
-         e_kin,e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr,temper,&
-         m_force(:,:), m_torque(:,:), a_force(:,:)
+         e_kin,e_pot,e_lenjon,e_bonds,e_mbat,e_atat,e_constr,temper, &
+         e_mbgo, e_go, e_stretch, e_bend, e_torsion, e_native, e_nonnat, &        
+         m_force(:,:), m_torque(:,:), a_force(:,:), g_force(:,:)
     LOGICAL, INTENT(IN) :: is_constr, pbc(3)
     INTEGER, INTENT(IN) :: tvector(8), n_elems, btype(3)
     INTEGER, POINTER :: found_types(:)
     TYPE(mbps), INTENT(IN) :: params
     TYPE(cps), INTENT(IN) :: control
+    TYPE(gops), INTENT(IN) :: go
     INTEGER, POINTER :: mm_nbors(:,:), mm_n_nbor(:), &
          ma_nbors(:,:), ma_n_nbor(:), aa_nbors(:,:), aa_n_nbor(:)
     CHARACTER(LEN=20) :: thetime
-    INTEGER :: ii, jj, nj, kk, n_mbs, n_ats, closest, closelist(5), listnumber
+    INTEGER :: ii, jj, nj, kk, n_mbs, n_ats, n_gos, closest, closelist(5), listnumber
     REAL(KIND=dp) :: closedist, rangedist(5), testdist, vec(3)
 
     n_mbs = mbs_size(mbs)
     n_ats = ats_size(ats)
+    n_gos = gos_size(gos)
 
     IF(cpu_id == master_cpu)THEN
-       WRITE(ioindex,'(A)') & ! title
-         "*******************************************************************\n"//&
-         "*                         CASHEW "//version//"                        *\n"//&
-         "* Coarse Approach Simulator for Hydrogen-bonding Effects in Water *\n"//&
-         "*                                                                 *\n"//&
-         "*          Dias et al., J. Chem. Phys. 131 (2009) 054505          *\n"//&
-         "*                                                                 *\n"//&
-         "*                      Teemu Hynninen 2009                        *\n"//&
-         "*******************************************************************\n"
+       WRITE(ioindex,'(A)') "*******************************************************************"
+       WRITE(ioindex,'(A)') "*                         CASHEW "//version//"                    *"
+       WRITE(ioindex,'(A)') "* Coarse Approach Simulator for Hydrogen-bonding Effects in Water *"
+       WRITE(ioindex,'(A)') "*                                                                 *"
+       WRITE(ioindex,'(A)') "*        Hynninen et al. Comp. Phys. Comm., 183, 363 (2012)       *"
+       WRITE(ioindex,'(A)') "*        Dias et al., J. Chem. Phys. 131 (2009) 054505            *"
+       WRITE(ioindex,'(A)') "*                                                                 *"
+       WRITE(ioindex,'(A)') "*                      Teemu Hynninen 2009                        *"
+       WRITE(ioindex,'(A)') "*******************************************************************"
 
        ! time
     CALL date_string(tvector(1),tvector(2),tvector(3),tvector(5),tvector(6),tvector(7),thetime)
-    WRITE(ioindex,'(A,I2,A,I2,A,I4,A,I2,A,I2,A,I2)') "  Simulation started   "//thetime//"\n\n"
+    WRITE(ioindex,'(A,I2,A,I2,A,I4,A,I2,A,I2,A,I2)') "  Simulation started   "//thetime
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') ""
 
     ! basic info
     IF(control%verblevel >= 1)THEN
-       WRITE(ioindex,'(A)') &
-            "Name of simulation: "//system//"\n\n"//& ! name
-            "Input read from file "//system//"."//MB_IN//"\n" ! input
+       WRITE(ioindex,'(A)') "Name of simulation: "//system ! name
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') "Input read from file "//system//"."//MB_IN ! input
+       WRITE(ioindex,'(A)') ""
 #ifdef MPI
        WRITE(ioindex,'(A,I4,A)') &
-            "Running on ", n_cpus, " processors\n" ! number of cpus
+            "Running on ", n_cpus, " processors" ! number of cpus
+       WRITE(ioindex,'(A)') ""
 #else
        WRITE(ioindex,'(A)') &
-            "Running the serial version\n" ! number of cpus = 1
+            "Running the serial version" ! number of cpus = 1
+       WRITE(ioindex,'(A)') ""
 #endif
        WRITE(ioindex,'(A)') &
-            "Simulation parameters in use: \n"//HORILINE//"\n" ! line
+            "Simulation parameters in use:"
+       WRITE(ioindex,'(A)') HORILINE ! line
+       WRITE(ioindex,'(A)') ""
 
        ! write the current set of input parameters
-       CALL write_input(ioindex,mbs,ats,n_elems,&
-            params,control,cell,btype,bval,is_constr)
+       CALL write_input(ioindex,mbs,ats,gos,n_elems,&
+            params,control,go,cell,btype,bval,is_constr)
     ELSE ! lower verbosity level
        WRITE(ioindex,'(A)') &
-            "Name of simulation: "//system//"\n\n"//&
-            "Input read from file "//system//"."//MB_IN//"\n"
+            "Name of simulation: "//system
+
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') "Input read from file "//system//"."//MB_IN
+       WRITE(ioindex,'(A)') ""
+
 #ifdef MPI
        WRITE(ioindex,'(A,I4,A)') &
-            "Running on ", n_cpus, " processors\n"
+            "Running on ", n_cpus, " processors"
+       WRITE(ioindex,'(A)') ""
 #else
        WRITE(ioindex,'(A)') &
-            "Running the serial version\n" ! number of cpus = 1
+            "Running the serial version" ! number of cpus = 1
+       WRITE(ioindex,'(A)') ""
 #endif
     END IF
 
     
     IF(control%verblevel >= 2)THEN ! write the initial close neighbors lists
-       WRITE(ioindex,'(A)') "\n"
-       WRITE(ioindex,'(A)') HORILINE//"\n"
-       WRITE(ioindex,'(A)') "Close neighbors: \n"
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') HORILINE
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') "Close neighbors: "
+       WRITE(ioindex,'(A)') ""
        
        ! generate lists of near neighbors
        DO ii = 1, n_mbs
@@ -5074,16 +5105,24 @@ CONTAINS
 
 
     IF(control%verblevel >= 3)THEN ! write the forces acting on the particles
-       WRITE(ioindex,'(A)') "\n"
-       WRITE(ioindex,'(A)') HORILINE//"\n"
-       WRITE(ioindex,'(A)') "Forces acting on particles: \n"
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') HORILINE
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') "Forces acting on particles: "
+       WRITE(ioindex,'(A)') ""
        DO ii = 1, n_mbs
           WRITE(ioindex,'(I8,F18.6,F18.6,F18.6,A)') mbs(ii)%index, m_force(1:3,ii)," ! "//mbname
        END DO
        DO ii = 1, n_ats
           WRITE(ioindex,'(I8,F18.6,F18.6,F18.6,A)') ats(ii)%index, a_force(1:3,ii)," ! "//params%atomic_labels(ats(ii)%type)
        END DO
-       WRITE(ioindex,'(A)') "\nTorques acting on MB molecules: \n"
+       DO ii = 1, n_gos
+          WRITE(ioindex,'(I8,F18.6,F18.6,F18.6,A)') gos(ii)%index, g_force(1:3,ii)," ! "//goname          
+       END DO
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') "Torques acting on MB molecules: "
+       WRITE(ioindex,'(A)') ""
        DO ii = 1, n_mbs
           WRITE(ioindex,'(I8,F18.6,F18.6,F18.6,A)') mbs(ii)%index, m_torque(1:3,ii)," ! "//mbname
        END DO
@@ -5091,16 +5130,19 @@ CONTAINS
 
     ! basic info
     IF(control%verblevel >= 0)THEN
-       WRITE(ioindex,'(A)') "\n"
-       WRITE(ioindex,'(A)') HORILINE//"\n"
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') HORILINE
+       WRITE(ioindex,'(A)') ""
        
        WRITE(ioindex,'(A,F20.4)') "Simulation volume:          ", cell(1)*cell(2)*cell(3) ! volume
        WRITE(ioindex,'(A)') ""
        
        ! number of particles
-       WRITE(ioindex,'(A,I20)')   "Number of particles:        ", n_mbs+n_ats 
+       WRITE(ioindex,'(A,I20)')   "Number of particles:        ", n_mbs+n_ats+n_gos
        WRITE(ioindex,'(A,I20)')   "  water molecules:          ", n_mbs 
        WRITE(ioindex,'(A,I20)')   "  atomic particles:         ", n_ats 
+       WRITE(ioindex,'(A,I20)')   "  go particles:             ", n_gos 
        IF(n_elems > 0)THEN
           DO ii = 1, n_elems
              WRITE(ioindex,'(A,I20)') "     "//params%atomic_labels(ii)//" :                ", found_types(ii)           
@@ -5119,11 +5161,21 @@ CONTAINS
           WRITE(ioindex,'(A,F20.4)') "     MB-atom potential:     ", e_mbat
           WRITE(ioindex,'(A,F20.4)') "     atom-atom potential:   ", e_atat
        END IF
+       IF(n_gos > 0)THEN
+          WRITE(ioindex,'(A,F20.4)') "     MB-GO potential:       ", e_mbgo
+          WRITE(ioindex,'(A,F20.4)') "     GO-GO potential:       ", e_go
+          WRITE(ioindex,'(A,F20.4)') "        GO stretching:      ", e_stretch
+          WRITE(ioindex,'(A,F20.4)') "        GO bending:         ", e_bend
+          WRITE(ioindex,'(A,F20.4)') "        GO torsion:         ", e_torsion
+          WRITE(ioindex,'(A,F20.4)') "        GO native:          ", e_native
+          WRITE(ioindex,'(A,F20.4)') "        GO non-native:      ", e_nonnat
+       END IF
        IF(is_constr)THEN
           WRITE(ioindex,'(A,F20.4)') "     constraint potential:  ", e_constr
        END IF
     
-       WRITE(ioindex,'(A)') "\n"
+       WRITE(ioindex,'(A)') ""
+       WRITE(ioindex,'(A)') ""
     END IF
  END IF
 
@@ -5147,26 +5199,28 @@ CONTAINS
   ! *n_elems number of different types of atoms
   ! *found_types the number of atoms of each type
   ! *is_constr true if there are constraints in place  
-  SUBROUTINE write_input(ioindex,mbs,ats,n_elems,&
-       params,control,cell,btype,bval,is_constr)
+  SUBROUTINE write_input(ioindex,mbs,ats,gos,n_elems,&
+       params,control,go,cell,btype,bval,is_constr)
     IMPLICIT NONE
     INTEGER, INTENT(IN) :: ioindex
     !CHARACTER(LEN=*) :: system
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     REAL(KIND=dp), INTENT(IN) :: cell(3), bval(3)
     LOGICAL, INTENT(IN) :: is_constr
     INTEGER, INTENT(IN) :: n_elems, btype(3)    
     TYPE(mbps), INTENT(IN) :: params
     TYPE(cps), INTENT(IN) :: control
+    TYPE(gops), INTENT(IN) :: go
     CHARACTER(LEN=20) :: writetag
     CHARACTER(LEN=500) :: writeline
-    INTEGER :: ii, jj, kk, ll, n_mbs, n_ats, n_pot, contline, group_ind
+    INTEGER :: ii, jj, kk, ll, n_mbs, n_ats, n_gos, n_pot, contline, group_ind
     LOGICAL :: is_constrained
 
     n_mbs = mbs_size(mbs)
     n_ats = ats_size(ats)
-
+    n_gos = gos_size(gos)
 
     IF(cpu_id == master_cpu)THEN
     ! control
@@ -5293,6 +5347,103 @@ CONTAINS
        WRITE(ioindex,'(A10,F20.5,A)') l_ohtag//" ",params%l_oh," ! O-H length"
     END IF
     WRITE(ioindex,'(A)') "</"//mb_block//">"
+    
+    ! go
+    IF(n_gos > 0)THEN
+       WRITE(ioindex,'(A)') "<"//go_block//">"
+
+       ! chain
+       WRITE(ioindex,'(A10)',advance='no') chaintag//" "
+       DO ii = 1, go%length
+          WRITE(ioindex,'(I10,A1)',advance='no') go%indices(ii), " "
+       END DO
+       WRITE(ioindex,'(A)',advance='yes') " ! particle indices  "
+
+       ! mass
+       WRITE(ioindex,'(A10)',advance='no') masstag//" "
+       DO ii = 1, go%length
+          WRITE(ioindex,'(F10.5,A1)',advance='no') go%mass_chain(ii)/m_scale, " "
+       END DO
+       WRITE(ioindex,'(A)',advance='yes') " ! masses  "
+
+       ! lengths
+       WRITE(ioindex,'(A10)',advance='no') lengthstag//" "
+       DO ii = 1, go%length-1
+          WRITE(ioindex,'(F10.5,A1)',advance='no') go%r_chain(ii), " "
+       END DO
+       WRITE(ioindex,'(A)',advance='yes') " ! chain bond lengths  "
+
+       ! bend angles
+       WRITE(ioindex,'(A10)',advance='no') bondanglestag//" "
+       DO ii = 1, go%length-2
+          WRITE(ioindex,'(F10.5,A1)',advance='no') go%theta_chain(ii), " "
+       END DO
+       WRITE(ioindex,'(A)',advance='yes') " ! chain bond angles  "
+
+       ! torsion angles
+       WRITE(ioindex,'(A10)',advance='no') torsionanglestag//" "
+       DO ii = 1, go%length-3
+          WRITE(ioindex,'(F10.5,A1)',advance='no') go%phi_chain(ii), " "
+       END DO
+       WRITE(ioindex,'(A)',advance='yes') " ! chain torsion angles  "
+
+       ! mb epsilons
+       WRITE(ioindex,'(A10)',advance='no') eps_mbtag//" "
+       DO ii = 1, go%length
+          WRITE(ioindex,'(F10.5,A1)',advance='no') go%epsilon_water(ii), " "
+       END DO
+       WRITE(ioindex,'(A)',advance='yes') " ! GO-MB epsilons  "
+
+       ! epsilon
+       WRITE(ioindex,'(A10)',advance='no') eps_nativetag//" "
+       WRITE(ioindex,'(F10.5,A1)',advance='no') go%epsilon, " "
+       WRITE(ioindex,'(A)',advance='yes') " ! native bond epsilon  "
+
+       ! sigma
+       WRITE(ioindex,'(A10)',advance='no') sigma_mbtag//" "
+       WRITE(ioindex,'(F10.5,A1)',advance='no') go%sigma, " "
+       WRITE(ioindex,'(A)',advance='yes') " ! GO-MB sigma  "
+
+       ! k r
+       WRITE(ioindex,'(A10)',advance='no') krtag//" "
+       WRITE(ioindex,'(F10.5,A1)',advance='no') go%kr, " "
+       WRITE(ioindex,'(A)',advance='yes') " ! K_r  "
+
+       ! k theta
+       WRITE(ioindex,'(A10)',advance='no') k_thetatag//" "
+       WRITE(ioindex,'(F10.5,A1)',advance='no') go%ktheta, " "
+       WRITE(ioindex,'(A)',advance='yes') " ! K_theta  "
+
+       ! k phi 1
+       WRITE(ioindex,'(A10)',advance='no') k_phi1tag//" "
+       WRITE(ioindex,'(F10.5,A1)',advance='no') go%kphi1, " "
+       WRITE(ioindex,'(A)',advance='yes') " ! K_phi 1  "
+
+       ! k phi 2
+       WRITE(ioindex,'(A10)',advance='no') k_phi2tag//" "
+       WRITE(ioindex,'(F10.5,A1)',advance='no') go%kphi2, " "
+       WRITE(ioindex,'(A)',advance='yes') " ! K_phi 2  "
+
+       ! repulsive r
+       WRITE(ioindex,'(A10)',advance='no') r_repulsivetag//" "
+       WRITE(ioindex,'(F10.5,A1)',advance='no') go%r_rep, " "
+       WRITE(ioindex,'(A)',advance='yes') " ! repulsive (non-native) r  "
+
+       ! native r
+       do ii = 1, go%length-1
+          do jj = ii+1, go%length
+             IF(go%r_native(ii,jj) > 0.d0)THEN
+                WRITE(ioindex,'(A10)',advance='no') r_nativetag//" "
+                WRITE(ioindex,'(I10,I10,F10.5,A1)',advance='no') go%indices(ii),go%indices(jj),&
+                     go%r_native(ii,jj), " "
+                WRITE(ioindex,'(A)',advance='yes') " ! attractive (native) r  "       
+             END IF
+          END do
+       END do
+
+       WRITE(ioindex,'(A)') "</"//go_block//">"
+    END IF
+
     ! cell
     WRITE(ioindex,'(A)') "<"//cell_block//">"
     DO ii = 1,3 ! loop x, y, z
@@ -5324,6 +5475,10 @@ CONTAINS
        WRITE(ioindex,'(I8,A7,F18.7,F18.7,F18.7)') &
             ats(ii)%index, " "//ats(ii)%element//" ", ats(ii)%pos
     END DO
+    DO ii = 1, n_gos ! loop over gos
+       WRITE(ioindex,'(I8,A7,F18.7,F18.7,F18.7)') &
+            gos(ii)%index, " "//goname//" ", gos(ii)%pos
+    END DO
     WRITE(ioindex,'(A)') "</"//pos_block//">"
     ! velocities
     WRITE(ioindex,'(A)') "<"//vel_block//">"
@@ -5334,6 +5489,10 @@ CONTAINS
     DO ii = 1, n_ats ! loop over atoms
        WRITE(ioindex,'(I8,F18.7,F18.7,F18.7,A)') &
             ats(ii)%index, ats(ii)%vel, " ! "//ats(ii)%element
+    END DO
+    DO ii = 1, n_gos ! loop over gos
+       WRITE(ioindex,'(I8,F18.7,F18.7,F18.7,A)') &
+            gos(ii)%index, gos(ii)%vel, " ! "//goname
     END DO
     WRITE(ioindex,'(A)') "</"//vel_block//">"
     ! constraints
@@ -5409,6 +5568,43 @@ CONTAINS
              WRITE(ioindex,'(A)') " ! "//ats(ii)%element
           END IF
        END DO
+
+
+       DO ii = 1, n_gos ! loop over gos
+          is_constrained = .false.
+          ! check if this atom is constrained
+          DO jj = 1, 3 ! loop over x, y, z
+             IF(gos(ii)%constrained(jj) /= no_constr_index)THEN
+                is_constrained = .true.
+             END IF
+          END DO
+          ! write the constraints only if the atom is not free
+          IF(is_constrained)THEN
+             WRITE(ioindex,'(I7,A)',advance='no') gos(ii)%index,"  "
+             DO jj = 1, 3
+                SELECT CASE(gos(ii)%constrained(jj))
+
+                CASE(no_constr_index)
+                   writetag = freetag
+                CASE(all_frozen_index)
+                   writetag = frozentag//" "//alltag
+                CASE(frozen_pos_index)
+                   writetag = frozentag//" "//postag
+                CASE(harmonic_well_index)
+                   WRITE(writetag,'(A,F10.5)') welltag//" ", gos(ii)%well(jj)
+                CASE(frozen_vel_index)
+                   writetag = frozentag//" "//veltag
+                CASE(ext_force_index)
+                   WRITE(writetag,'(A,F10.5)') forcetag//" ", gos(ii)%well(jj)
+
+                END SELECT
+                
+                WRITE(ioindex,'(A17)',advance='no') writetag//" "
+             END DO
+             WRITE(ioindex,'(A)') " ! "//goname
+          END IF
+       END DO
+
 
        WRITE(ioindex,'(A)') "</"//constr_block//">"
     END IF
@@ -5731,13 +5927,14 @@ CONTAINS
   ! *ats list of atoms
   ! *hands the length of the h-bond arms
   ! *newfile if true, a new file is written. otherwise, an existing file is appended
-  SUBROUTINE write_xyz(filename,mbs,ats,hands,newfile)
+  SUBROUTINE write_xyz(filename,mbs,ats,gos,hands,newfile)
     IMPLICIT NONE
     CHARACTER(LEN=*), INTENT(IN) :: filename
     TYPE(mb), POINTER :: mbs(:)
     TYPE(atom), POINTER :: ats(:)
+    TYPE(gop), POINTER :: gos(:)
     REAL(KIND=dp), INTENT(IN) :: hands
-    INTEGER :: n_mbs, n_ats
+    INTEGER :: n_mbs, n_ats, n_gos
     INTEGER :: ii, ioindex, iostat
     REAL(KIND=dp) :: h1(3), h2(3), h3(3), h4(3)
     LOGICAL, INTENT(IN) :: newfile
@@ -5756,8 +5953,9 @@ CONTAINS
        
        n_mbs = mbs_size(mbs)
        n_ats = ats_size(ats)
+       n_gos = gos_size(gos)
        WRITE(ioindex,'(A)') ""
-       WRITE(ioindex,'(I10)') n_mbs*5+n_ats
+       WRITE(ioindex,'(I10)') n_mbs*5+n_ats+n_gos
 
        DO ii = 1, n_mbs ! loop over mbs
           CALL get_HB_vectors(mbs(ii),h1,h2,h3,h4)
@@ -5776,6 +5974,10 @@ CONTAINS
        DO ii = 1, n_ats ! loop over atoms
           WRITE(ioindex,'(A,F20.8,F20.8,F20.8)') &
                ats(ii)%element, ats(ii)%pos(1), ats(ii)%pos(2), ats(ii)%pos(3)       
+       END DO
+       DO ii = 1, n_gos ! loop over atoms
+          WRITE(ioindex,'(A,F20.8,F20.8,F20.8)') &
+               goname, gos(ii)%pos(1), gos(ii)%pos(2),gos(ii)%pos(3)       
        END DO
        
        ! close output
