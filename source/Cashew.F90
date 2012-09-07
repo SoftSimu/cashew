@@ -635,8 +635,8 @@ PROGRAM cashew
   END IF
   ! barometer
   IF(control_params%md_baro /= microcanonical_index)THEN
-     barotimer = control_params%baro_interval-offset
-     barosteps = FLOOR((control_params%baro_interval+offset)/control_params%time_step)
+     barotimer = (control_params%baro_interval*control_params%time_step-offset)
+     barosteps = FLOOR((control_params%baro_interval*control_params%time_step+offset)/control_params%time_step)
   ELSE
      barotimer = control_params%time_max*2.d0
      barosteps = 1
@@ -2263,7 +2263,7 @@ CONTAINS
           CALL checkpoint(time_force,timeA,timeB)
           
           ! reset counters
-          barotimer = barotimer + control_params%baro_interval
+          barotimer = barotimer + control_params%baro_interval*control_params%time_step
           barosteps = FLOOR((barotimer-simulation_time)/control_params%time_step)+1
           press = 0.d0
        END IF
