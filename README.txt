@@ -14,4 +14,4 @@ The original source code is contained in the folder "source". The program also u
 
 The folder "tutorial" contains three examples of running the program. Please see "tutorial.pdf" for instructions.
 
-The code has a permanent web address at https://gitorious.org/cashew .
+The code has a permanent web address at https://github.com/thynnine/cashew .
