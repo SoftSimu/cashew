@@ -15,3 +15,7 @@ The original source code is contained in the folder "source". The program also u
 The folder "tutorial" contains three examples of running the program. Please see "tutorial.pdf" for instructions.
 
 The code has a permanent web address at https://github.com/thynnine/cashew .
+
+*Citation:* http://dx.doi.org/10.1016/j.cpc.2011.09.008
+
+A molecular dynamics implementation of the 3D Mercedes-Benz water model, Teemu Hynninen, C.L. Dias, Anna Mkrtchyan, V. Heinonen, Mikko Karttunen, Adam S. Foster, Tapio Ala-Nissila, Computer Physics Communications 183, 363-369 (2011)
