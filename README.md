@@ -14,7 +14,7 @@ The original source code is contained in the folder "source". The program also u
 
 The folder "tutorial" contains three examples of running the program. Please see "tutorial.pdf" for instructions.
 
-The code has a permanent web address at https://github.com/thynnine/cashew .
+This is a form from the code at https://github.com/thynnine/cashew .
 
 *Citation:* http://dx.doi.org/10.1016/j.cpc.2011.09.008
 
